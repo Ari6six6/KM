@@ -101,7 +101,7 @@ daily driver — as an FP16 GGUF served through a hand-built CUDA llama.cpp.
 |-----|-------|-------|---------|
 | `glm` *(default)* | GLM-4.7-Flash (HauhauCS Balanced, uncensored) · FP16 GGUF | ~66 GB | llama.cpp |
 | `glm-q4` | GLM-4.7-Flash · Q4_K_M GGUF (small boxes) | ~24 GB | llama.cpp |
-| `glm-q5` | GLM-4.7-Flash · Q5_K_M GGUF | ~30 GB | llama.cpp |
+| `glm-q6` | GLM-4.7-Flash · Q6_K GGUF | ~34 GB | llama.cpp |
 | `hermes` | Hermes-4.3-36B · FP8 | ~44 GB | vLLM |
 | `qwen-official` | Qwen3.6-27B (official) · FP8 | ~30 GB | vLLM |
 | `qwen` | Qwen3.6-27B (uncensored) · Q5_K_P GGUF | ~22 GB | llama.cpp |

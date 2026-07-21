@@ -56,7 +56,9 @@ eq "glm served name" "${M_SERVED[glm]}" "glm-4.7-flash"
 eq "glm is llama_cpp" "${M_SERVER[glm]}" "llama_cpp"
 eq "hermes is vllm" "${M_SERVER[hermes]}" "vllm"
 eq "seven rows" "${#MODELS[@]}" "7"
-eq "smaller_quants(glm) ascending" "$(smaller_quants glm | awk '{print $1}' | paste -sd, -)" "glm-q4,glm-q5"
+eq "no dead glm-q5 row" "${M_LABEL[glm-q5]:-absent}" "absent"
+eq "glm-q6 serves Q6_K (real quant)" "${M_GGUF_QUANT[glm-q6]}" "Q6_K"
+eq "smaller_quants(glm) ascending" "$(smaller_quants glm | awk '{print $1}' | paste -sd, -)" "glm-q4,glm-q6"
 
 echo "== plan: tiers, util, refusal, suggestion =="
 GPU_COUNT=1; GPU_TOTAL_GB=79
@@ -69,7 +71,7 @@ GPU_COUNT=4; GPU_TOTAL_GB=320
 truthy "plan glm at 320GB" 'plan glm'; eq "  beyond all tiers -> 131072" "$PLAN_MAXLEN" "131072"; eq "  tp = gpu count" "$PLAN_TP" "4"
 GPU_COUNT=1; GPU_TOTAL_GB=40
 falsy "plan glm refuses 40GB (floor 66)" 'plan glm'
-has "  refusal suggests highest fitting quant (glm-q5, 30<=40)" "$CONN_WHY" "glm-q5"
+has "  refusal suggests highest fitting quant (glm-q6, 34<=40)" "$CONN_WHY" "glm-q6"
 GPU_COUNT=1; GPU_TOTAL_GB=10
 falsy "plan glm refuses 10GB" 'plan glm'
 has "  tiny box told to rent bigger" "$CONN_WHY" "won't fit"
@@ -79,13 +81,18 @@ has "llama_cmd glm uses --hf-repo/--hf-file" "$(_llama_cmd glm 131072 8080)" "--
 has "llama_cmd glm has --alias" "$(_llama_cmd glm 131072 8080)" "--alias glm-4.7-flash"
 has "llama_cmd glm has --jinja" "$(_llama_cmd glm 131072 8080)" "--jinja"
 has "llama_cmd glm-q4 uses -hf repo:quant" "$(_llama_cmd glm-q4 16384 8080)" ":Q4_K_M"
+has "llama_cmd glm-q6 uses -hf repo:Q6_K" "$(_llama_cmd glm-q6 16384 8080)" ":Q6_K"
 has "vllm_cmd hermes serves repo" "$(_vllm_cmd hermes 2 65536 0.92 8080)" "serve NousResearch/Hermes-4.3-36B"
 has "vllm_cmd hermes tensor-parallel" "$(_vllm_cmd hermes 2 65536 0.92 8080)" "--tensor-parallel-size 2"
 has "vllm_cmd hermes tool-call-parser" "$(_vllm_cmd hermes 2 65536 0.92 8080)" "--tool-call-parser hermes"
 
-echo "== weights byte parsing =="
+echo "== weights byte parsing (disk gate reads the DOWNLOAD size) =="
 eq "glm weights ~62GB" "$(_weights_bytes glm)" "62000000000"
-eq "hermes weights ~37GB" "$(_weights_bytes hermes)" "37000000000"
+# vLLM rows must report the BF16 DOWNLOAD size, not the resident FP8 size, or the
+# disk gate green-lights a box that dies mid-download (the exact failure it exists
+# to prevent).
+eq "hermes weights ~72GB BF16 download (not 37 resident)" "$(_weights_bytes hermes)" "72000000000"
+eq "qwen-official weights ~56GB BF16 download (not 27 resident)" "$(_weights_bytes qwen-official)" "56000000000"
 
 echo "== preflight (pure, injected values) =="
 COMPUTE_CAP="7.5"; falsy "capability vetoes FP8 on cc 7.5" 'capability_preflight hermes'; has "  names the fix" "$PF_MSG" "GGUF"
@@ -93,6 +100,10 @@ COMPUTE_CAP="9.0"; truthy "capability passes FP8 on Hopper" 'capability_prefligh
 COMPUTE_CAP="7.5"; truthy "capability ignores cc for GGUF rows" 'capability_preflight glm'
 FREE_BYTES=$((5*1000000000));  falsy "disk vetoes 5GB free for glm (~62GB)" 'disk_preflight glm'
 FREE_BYTES=$((200*1000000000)); truthy "disk passes 200GB free for glm" 'disk_preflight glm'
+# regression: a 45GB box must now be REFUSED for hermes (72GB BF16 download), the
+# case that previously slipped through when the note quoted the 37GB resident size.
+FREE_BYTES=$((45*1000000000)); falsy "disk vetoes 45GB free for hermes (72GB download)" 'disk_preflight hermes'
+FREE_BYTES=$((90*1000000000)); truthy "disk passes 90GB free for hermes" 'disk_preflight hermes'
 
 echo "== models.json writer (valid JSON, honest DEMO) =="
 export PI_DIR="$TMP/pi"; MODELS_JSON="$PI_DIR/models.json"

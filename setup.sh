@@ -68,7 +68,7 @@ die()  { erro "$*"; exit 1; }
 #  *below* wins; if it exceeds them all, use BEYOND.
 # ============================================================================
 
-MODELS=(glm glm-q4 glm-q5 hermes qwen-official qwen qwen-40b)
+MODELS=(glm glm-q4 glm-q6 hermes qwen-official qwen qwen-40b)
 DEFAULT_MODEL="glm"
 
 declare -A M_LABEL M_REPO M_SERVED M_MINGB M_TIERS M_BEYOND M_NOTE \
@@ -97,25 +97,27 @@ _row glm-q4 \
   "first run downloads the ~18GB Q4_K_M GGUF" \
   llama_cpp gguf hermes "" "Q4_K_M" ""
 
-_row glm-q5 \
-  "GLM-4.7-Flash (HauhauCS Balanced, uncensored) · Q5_K_M GGUF" \
-  "HauhauCS/GLM-4.7-Flash-Uncensored-HauhauCS-Balanced" "glm-4.7-flash" 30 \
-  "36:16384 44:32768 64:65536 100:98304" 131072 \
-  "first run downloads the ~22GB Q5_K_M GGUF" \
-  llama_cpp gguf hermes "" "Q5_K_M" ""
+# Q6_K, not Q5_K_M: the HauhauCS repo ships FP16/Q4_K_M/Q6_K/Q8_0 — there is no
+# Q5_K_M row to serve (verified live). Q6_K is the mid-tier that actually exists.
+_row glm-q6 \
+  "GLM-4.7-Flash (HauhauCS Balanced, uncensored) · Q6_K GGUF" \
+  "HauhauCS/GLM-4.7-Flash-Uncensored-HauhauCS-Balanced" "glm-4.7-flash" 34 \
+  "40:16384 48:32768 68:65536 104:98304" 131072 \
+  "first run downloads the ~25GB Q6_K GGUF" \
+  llama_cpp gguf hermes "" "Q6_K" ""
 
 _row hermes \
   "Hermes-4.3-36B (NousResearch) · FP8" \
   "NousResearch/Hermes-4.3-36B" "NousResearch/Hermes-4.3-36B" 44 \
   "56:16384 72:32768 96:65536 120:131072 168:196608" 262144 \
-  "first run downloads ~37GB of FP8 weights" \
+  "first run downloads ~72GB BF16, quantized to FP8 on load (~37GB resident)" \
   vllm fp8 hermes "" "" ""
 
 _row qwen-official \
   "Qwen3.6-27B (Alibaba, official) · FP8" \
   "Qwen/Qwen3.6-27B" "qwen3.6-27b-official" 30 \
   "40:32768 56:65536 80:131072 140:196608" 262144 \
-  "first run downloads ~27GB and quantizes to FP8 on the fly" \
+  "first run downloads ~56GB BF16, quantized to FP8 on load (~27GB resident)" \
   vllm fp8 hermes "" "" ""
 
 _row qwen \
@@ -506,22 +508,29 @@ launch() { # $1=key $2=tp $3=maxlen $4=util $5=port
     warn "a model server is already running on the box (--down to relaunch)."
     LAUNCHED_PORT="$port"; return 0
   fi
+  # install the runtime
   if [ "${M_SERVER[$key]}" = "llama_cpp" ]; then
     install_llama
-    _register_cuda_libs
-    local held; held="$(_clear_stale_and_check_port "$port")"
-    if [ -n "$held" ]; then
-      local alt; [ "$port" -lt 55535 ] && alt=$((port+10000)) || alt=8000
-      if [ -n "$(_clear_stale_and_check_port "$alt")" ]; then
-        die "ports $port and $alt are both held on the box — pick a free remote port for your -L forward by hand."
-      fi
-      warn "port $port is held on the box — sliding the server to $alt (your local side stays as is)."
-      port="$alt"
-    fi
-    cmd="$(_llama_cmd "$key" "$maxlen" "$port")"
+    _register_cuda_libs      # so llama-server finds libcudart/libcublas on exec
     env="$_CUDA_ENV"
   else
     install_vllm
+  fi
+  # clear orphans and slide off a squatted box port — BOTH runtimes bind --port,
+  # so both get the slide (vast.ai squats 8080 whichever we launch).
+  local held; held="$(_clear_stale_and_check_port "$port")"
+  if [ -n "$held" ]; then
+    local alt; [ "$port" -lt 55535 ] && alt=$((port+10000)) || alt=8000
+    if [ -n "$(_clear_stale_and_check_port "$alt")" ]; then
+      die "ports $port and $alt are both held on the box — pick a free remote port for your -L forward by hand."
+    fi
+    warn "port $port is held on the box — sliding the server to $alt (your local side stays as is)."
+    port="$alt"
+  fi
+  # build the launch command now that the port is settled
+  if [ "${M_SERVER[$key]}" = "llama_cpp" ]; then
+    cmd="$(_llama_cmd "$key" "$maxlen" "$port")"
+  else
     cmd="$(_vllm_cmd "$key" "$tp" "$maxlen" "$util" "$port")"
   fi
   step "launching: $(printf '%s' "$cmd" | cut -c1-110)…"
@@ -1066,9 +1075,9 @@ main() {
 
   while [ $# -gt 0 ]; do
     case "$1" in
-      --gpu)          gpu_str="${2:-}"; shift 2 ;;
+      --gpu)          gpu_str="${2:-}"; [ -n "$gpu_str" ] || die "--gpu needs a value: the pasted ssh string incl. its -L forward, e.g. --gpu \"-p 24439 root@1.2.3.4 -L 8080:localhost:8080\""; shift 2 ;;
       --gpu=*)        gpu_str="${1#--gpu=}"; shift ;;
-      --model)        model="${2:-}"; shift 2 ;;
+      --model)        model="${2:-}"; [ -n "$model" ] || die "--model needs a value (see --list-models)"; shift 2 ;;
       --model=*)      model="${1#--model=}"; shift ;;
       --no-gpu)       no_gpu=1; shift ;;
       --list-models)  action="list"; shift ;;
