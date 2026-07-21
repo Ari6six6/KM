@@ -1,0 +1,13 @@
+# KM keeps no build artifacts — the script is the point. This is mostly hygiene.
+*.log
+*.tmp
+.DS_Store
+
+# never commit runtime state or secrets (KM writes these on the operator's machine)
+.km/
+state.json
+*.km-backup.*
+.env
+
+# node, only if you develop the extension locally
+node_modules/

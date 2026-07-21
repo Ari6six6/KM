@@ -1,0 +1,31 @@
+name: ci
+
+# KM is bash + ssh + curl + coreutils. CI stays as cheap as the repo: lint the
+# script, prove the JSON is valid, and run the no-network test suite.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash syntax check
+        run: bash -n setup.sh
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning setup.sh tests/test_setup.sh
+
+      - name: validate JSON
+        run: |
+          python3 -c "import json; json.load(open('pi/models.json')); print('pi/models.json ok')"
+
+      - name: test suite (no box, no network)
+        run: bash tests/test_setup.sh

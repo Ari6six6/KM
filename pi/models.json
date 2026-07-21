@@ -1,0 +1,20 @@
+{
+  "providers": {
+    "km-box": {
+      "baseUrl": "http://localhost:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "km",
+      "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": false },
+      "models": [
+        {
+          "id": "glm-4.7-flash",
+          "name": "GLM-4.7-Flash (KM box)",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 131072,
+          "maxTokens": 8192
+        }
+      ]
+    }
+  }
+}
