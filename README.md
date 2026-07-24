@@ -70,6 +70,28 @@ served model is labelled `DEMO` until a real box attaches.
 
 ---
 
+## The Team
+
+Beyond the box, KM ships a three-musketeer crew — three `pi` instances with
+locked personalities you run side by side in separate terminals, all pointed at
+the same project:
+
+| Command    | Persona  | Role |
+|------------|----------|------|
+| `grokpi`   | GrokPi   | The adult in the room — primary coding lead. Writes real code, makes the calls, drives. |
+| `claudepi` | ClaudePi | The process babysitter and quality gate. Nags about tests and structure. Polite but relentless. |
+| `kimipi`   | KimiPi   | The silent observer — speaks only when something's actually broken or you're stuck. |
+
+Each runs with its own isolated Pi home, so their session trees never mix.
+
+```sh
+team/install-team.sh     # links grokpi / claudepi / kimipi into ~/.local/bin
+```
+
+Full details in [`team/`](team).
+
+---
+
 ## Managing the box (`km`)
 
 After the first run, KM drops a `km` command (and keeps a copy of the script at
