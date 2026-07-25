@@ -91,18 +91,20 @@ pi          # the app. all of it.
 /compact    # run this BEFORE switching down to a smaller context window
 ```
 
-> **Coming from the team layout?** Your keys and history live in the musketeer's
-> isolated home, not `~/.pi`. That directory is untracked, so it survives the
-> pull — move it over once, then delete it (freeze the board first if you want
-> to keep it: `cp team/board/board.md ~/km-board.md`).
+> **Coming from the team layout?** Your keys and session history live inside the
+> musketeer's isolated home, not `~/.pi` — and that directory is untracked, so it
+> survives the pull. One command brings it home:
 >
 > ```sh
-> mkdir -p ~/.pi/agent/sessions
-> cp -n  team/homes/grok/.pi/agent/auth.json  ~/.pi/agent/auth.json
-> cp -rn team/homes/grok/.pi/agent/sessions/. ~/.pi/agent/sessions/
-> rm -rf team ~/.local/bin/claudepi ~/.local/bin/grokpi ~/.local/bin/kimipi \
->        ~/.local/bin/post ~/.local/bin/board
+> km --adopt-team
 > ```
+>
+> It merges the keys into `~/.pi/agent/auth.json` (**yours win every clash**),
+> copies the sessions over so `/resume` still finds them, clears the dead
+> `claudepi`/`grokpi`/`kimipi` symlinks, and then prints the `rm -rf` for the
+> leftover directory — it never deletes anything of yours. A normal `setup.sh`
+> run does the same thing on its way past. Freeze the board first if you want to
+> keep it: `cp team/board/board.md ~/km-board.md`.
 
 ---
 
@@ -119,6 +121,7 @@ km off           # drop the tunnel (leave the server running on the box)
 km down          # stop the server AND drop the tunnel
 km --check       # verify the whole install; meaningful exit codes
 km --list-models # print the model catalog
+km --adopt-team  # one-time: pull an old team home's keys + history into ~/.pi
 km --uninstall   # clean reversal
 ```
 

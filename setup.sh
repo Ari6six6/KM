@@ -809,6 +809,133 @@ EOF
   chmod +x "$bindir/km" 2>/dev/null || true
 }
 
+# ---------------------------------------------------------------------------
+# One-time adoption of the old team homes (KM <= 1.0).
+#
+# The three-musketeer crew gave each persona an isolated Pi home under
+# team/homes/<name>/, so `pi` wrote that persona's cloud keys to
+# team/homes/<name>/.pi/agent/auth.json and its history to .../sessions/.
+# In practice every key landed in whichever musketeer the operator actually
+# used. v1.1 folded the crew into one agent, so those files have to come home
+# to ~/.pi/agent — losing them means re-adding keys by hand, which is exactly
+# the tax this repo exists to abolish.
+#
+# Idempotent: never clobbers an existing credential, prints what it moved, and
+# is a silent no-op once there is nothing left to adopt. Delete this function
+# when the last team install is gone.
+# ---------------------------------------------------------------------------
+adopt_team_home() {
+  local roots=() root best="" best_size=0 size agent adopted=0
+  [ -n "${KM_TEAM_DIR:-}" ] && roots+=("$KM_TEAM_DIR")
+  [ -n "$REPO_DIR" ] && roots+=("$REPO_DIR/team/homes")
+  roots+=("$HOME/KM/team/homes" "$KM_HOME/team/homes")
+
+  # pick the richest auth.json across every musketeer home we can find
+  for root in "${roots[@]}"; do
+    [ -d "$root" ] || continue
+    for agent in "$root"/*/.pi/agent; do
+      [ -f "$agent/auth.json" ] || continue
+      size=$(wc -c < "$agent/auth.json" 2>/dev/null || echo 0)
+      [ "$size" -gt "$best_size" ] && { best="$agent"; best_size="$size"; }
+    done
+  done
+  # nothing to adopt, or only an empty `{}` — the normal case; caller stays quiet
+  [ -n "$best" ] && [ "$best_size" -gt 3 ] || return 1
+
+  step "found an old team home — adopting its keys and history…"
+  info "  from $best"
+  mkdir -p "$PI_DIR"
+
+  # --- credentials -------------------------------------------------------
+  local dst="$PI_DIR/auth.json" dst_size=0
+  [ -f "$dst" ] && dst_size=$(wc -c < "$dst" 2>/dev/null || echo 0)
+  if [ "$dst_size" -le 3 ]; then
+    cp "$best/auth.json" "$dst" && chmod 600 "$dst"
+    ok "  keys adopted → $dst"
+    adopted=1
+  elif cmp -s "$best/auth.json" "$dst"; then
+    info "  keys already in place — nothing to do"
+  elif command -v python3 >/dev/null 2>&1; then
+    # both files hold credentials: merge, and let the existing ones win every
+    # collision. A key you are already using is never overwritten by an old one.
+    local added
+    if added=$(python3 - "$dst" "$best/auth.json" <<'PY'
+import json, os, sys
+dst, src = sys.argv[1], sys.argv[2]
+try:
+    cur = json.load(open(dst)); old = json.load(open(src))
+except Exception:
+    sys.exit(1)
+if not isinstance(cur, dict) or not isinstance(old, dict):
+    sys.exit(1)
+new = [k for k in old if k not in cur]
+cur.update({k: old[k] for k in new})
+tmp = dst + ".km-tmp"                       # never truncate the live file
+with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
+    json.dump(cur, fh, indent=2)
+os.replace(tmp, dst)
+print(" ".join(new))
+PY
+    ); then
+      chmod 600 "$dst"
+      if [ -n "$added" ]; then
+        ok "  keys merged → $dst (added: $added; yours kept on every clash)"
+      else
+        info "  your credentials already cover the team's — nothing added"
+      fi
+      adopted=1
+    else
+      cp "$best/auth.json" "$PI_DIR/auth.from-team.json"; chmod 600 "$PI_DIR/auth.from-team.json"
+      warn "  could not merge credentials — saved them beside yours instead"
+      info "  yours: $dst   ·   the team's: $PI_DIR/auth.from-team.json"
+    fi
+  else
+    cp "$best/auth.json" "$PI_DIR/auth.from-team.json"; chmod 600 "$PI_DIR/auth.from-team.json"
+    warn "  you already have credentials and python3 is missing — kept both, merged neither"
+    info "  yours: $dst   ·   the team's: $PI_DIR/auth.from-team.json"
+  fi
+
+  # --- session history ---------------------------------------------------
+  if [ -d "$best/sessions" ]; then
+    mkdir -p "$PI_DIR/sessions"
+    cp -rn "$best/sessions/." "$PI_DIR/sessions/" 2>/dev/null || true
+    local n; n=$(find "$best/sessions" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')
+    if [ "${n:-0}" -gt 0 ]; then
+      ok "  $n session file(s) adopted → $PI_DIR/sessions (resume with /resume)"
+      adopted=1
+    fi
+  fi
+
+  # --- dead launcher symlinks (claudepi/grokpi/… now point at deleted files) ---
+  local bindir="$HOME/.local/bin" name dead=0
+  for name in claudepi grokpi kimipi post board; do
+    if [ -L "$bindir/$name" ] && [ ! -e "$bindir/$name" ]; then
+      rm -f "$bindir/$name"; dead=$((dead+1))
+    fi
+  done
+  [ "$dead" -gt 0 ] && ok "  removed $dead dead launcher symlink(s) from $bindir"
+
+  if [ "$adopted" = "1" ]; then
+    local teamdir; teamdir="$(cd "$best/../../../.." && pwd)"
+    info "  the old home is now a copy — when you are ready:  rm -rf \"$teamdir\""
+  fi
+  return 0
+}
+
+# `km --adopt-team` — run the adoption on its own, without touching the box
+# wiring. Re-running the full installer would rewrite models.json to DEMO.
+cmd_adopt() {
+  printf '%sKM --adopt-team%s  ·  pi home: %s\n\n' "$C_B" "$C_0" "$PI_DIR"
+  if adopt_team_home; then
+    echo
+    ok "done — start pi normally; /model lists every provider you had"
+  else
+    info "no old team home found (looked in \$KM_TEAM_DIR, ./team/homes, ~/KM/team/homes, $KM_HOME/team/homes)"
+    info "point KM at it explicitly if it lives elsewhere:"
+    info "  KM_TEAM_DIR=/path/to/team/homes km --adopt-team"
+  fi
+}
+
 # ============================================================================
 #  SECTION 13 — the zero-to-hero card
 # ============================================================================
@@ -1060,6 +1187,7 @@ ${C_B}Manage (after first run — also available as the ${C_C}km${C_0}${C_B} com
 ${C_B}Utility:${C_0}
   setup.sh --check                  verify install (meaningful exit codes)
   setup.sh --list-models            print the catalog
+  setup.sh --adopt-team             move an old team home's keys + history into ~/.pi
   setup.sh --uninstall              clean reversal
   setup.sh --help
 
@@ -1087,6 +1215,7 @@ main() {
       --off|off)              action="off"; shift ;;
       --down|down)            action="down"; shift ;;
       --check|check)          action="check"; shift ;;
+      --adopt-team|adopt-team) action="adopt"; shift ;;
       --uninstall|uninstall)  action="uninstall"; shift ;;
       -h|--help|help)         usage; exit 0 ;;
       *) erro "unknown argument: $1"; echo; usage; exit 2 ;;
@@ -1109,6 +1238,7 @@ main() {
     off)       cmd_off; exit 0 ;;
     down)      cmd_down; exit 0 ;;
     check)     cmd_check ;;
+    adopt)     cmd_adopt; exit 0 ;;
     uninstall) cmd_uninstall; exit 0 ;;
   esac
 
@@ -1117,6 +1247,7 @@ main() {
   ensure_node
   ensure_pi
   self_install
+  adopt_team_home || true   # one-time: bring an old team home's keys in (no-op otherwise)
 
   if [ "$no_gpu" = "1" ] || [ -z "$gpu_str" ]; then
     if [ "$no_gpu" != "1" ] && [ -z "$gpu_str" ]; then
