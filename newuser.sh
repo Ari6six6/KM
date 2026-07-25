@@ -5,7 +5,7 @@
 # password read interactively), then hardens the server.
 #
 #   Run as root (paste in your provider's web terminal):
-#     curl -fsSL https://raw.githubusercontent.com/Ari6six6/KM/claude/vps-setup-user-creation-4o06e2/newuser.sh | bash
+#     curl -fsSL https://raw.githubusercontent.com/Ari6six6/KM/main/newuser.sh | bash
 #
 # What it does, in order:
 #   1. Pre-flight (root, distro, admin group).
