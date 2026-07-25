@@ -72,23 +72,28 @@ served model is labelled `DEMO` until a real box attaches.
 
 ## The Team
 
-Beyond the box, KM ships a three-musketeer crew — three `pi` instances with
-locked personalities you run side by side in separate terminals, all pointed at
-the same project:
+Beyond the box, KM ships a crew — three `pi` instances with locked roles that you
+run side by side in separate terminals, all pointed at the same project:
 
 | Command    | Persona  | Role |
 |------------|----------|------|
-| `grokpi`   | GrokPi   | The adult in the room — primary coding lead. Writes real code, makes the calls, drives. |
-| `claudepi` | ClaudePi | The process babysitter and quality gate. Nags about tests and structure. Polite but relentless. |
-| `kimipi`   | KimiPi   | The silent observer — speaks only when something's actually broken or you're stuck. |
+| `claudepi` | ClaudePi | **The adult in the room — the primary coder.** Builds by default; his work is what ships unless something better replaces it. |
+| `grokpi`   | GrokPi   | **The challenger.** Only puts code up when it genuinely beats ClaudePi's — and must say why. |
+| `kimipi`   | KimiPi   | **The judge.** Reads both and passes exactly one. Nothing ships until Kimi passes it. |
 
-Each runs with its own isolated Pi home, so their session trees never mix.
+They coordinate through **the board** — one shared file (`team/board/board.md`)
+everyone reads and writes. No server, no database, just a Linux file you paste
+into:
 
 ```sh
-team/install-team.sh     # links grokpi / claudepi / kimipi into ~/.local/bin
+team/install-team.sh          # links claudepi/grokpi/kimipi + post/board onto PATH
+post operator "build X"       # you drop a task on the board
+board                         # read it   (board -f follows live)
 ```
 
-Full details in [`team/`](team).
+The loop: you post a task → ClaudePi builds → GrokPi challenges only if he's got
+something better → KimiPi passes one → you take it. Each worker keeps its own
+isolated session tree. Full details in [`team/`](team).
 
 ---
 
