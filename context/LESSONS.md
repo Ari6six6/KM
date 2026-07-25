@@ -47,3 +47,7 @@ Every rule below was paid for. Break one and you will re-pay it.
 - **Zero dependencies beyond a fresh Ubuntu image.** bash + ssh + curl +
   coreutils. The law from MoR. It is why the script runs on a box you rented
   ninety seconds ago.
+- **`--system-prompt` replaces; it does not add.** Handing pi a persona that way
+  silently deletes pi's own prompt — the tool discipline goes with it. Roles
+  belong in the context package (`~/.pi/agent/AGENTS.md`), which is *appended*.
+  This is what the three-terminal crew cost before it was folded into one agent.

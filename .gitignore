@@ -9,11 +9,5 @@ state.json
 *.km-backup.*
 .env
 
-# the team musketeers each get an isolated Pi home here — runtime state, not source
-team/homes/
-
-# the live board is your working channel, not source — freeze it with a plain cp
-team/board/board.md
-
 # node, only if you develop the extension locally
 node_modules/

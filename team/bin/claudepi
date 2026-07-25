@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-TEAM_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export HOME="${TEAM_ROOT}/homes/claude"
-mkdir -p "$HOME"
-exec pi --system-prompt "$(cat "$TEAM_ROOT/personas/claude.md")" "$@"

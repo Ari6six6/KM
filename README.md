@@ -70,30 +70,39 @@ served model is labelled `DEMO` until a real box attaches.
 
 ---
 
-## The Team
+## One agent, three jobs
 
-Beyond the box, KM ships a crew — three `pi` instances with locked roles that you
-run side by side in separate terminals, all pointed at the same project:
+KM used to ship a crew: `claudepi` built, `grokpi` challenged, `kimipi` judged,
+and they passed work through a shared file. The three jobs were right. Three
+terminals were not — `pi` already hands you every model through `/model` and
+every rival version through `/tree`, in **one** session that keeps its context.
+Worse, each launcher shipped its persona via `--system-prompt`, which *replaces*
+pi's own prompt rather than adding to it.
 
-| Command    | Persona  | Role |
-|------------|----------|------|
-| `claudepi` | ClaudePi | **The adult in the room — the primary coder.** Builds by default; his work is what ships unless something better replaces it. |
-| `grokpi`   | GrokPi   | **The challenger.** Only puts code up when it genuinely beats ClaudePi's — and must say why. |
-| `kimipi`   | KimiPi   | **The judge.** Reads both and passes exactly one. Nothing ships until Kimi passes it. |
-
-They coordinate through **the board** — one shared file (`team/board/board.md`)
-everyone reads and writes. No server, no database, just a Linux file you paste
-into:
+So the crew moved into the context package, as a contract one agent holds
+itself: build by default, challenge your own build, pass exactly one version.
+It is [`context/PERSONA.md`](context/PERSONA.md) — edit it like any other lore
+file, re-run `setup.sh`, `/reload`.
 
 ```sh
-team/install-team.sh          # links claudepi/grokpi/kimipi + post/board onto PATH
-post operator "build X"       # you drop a task on the board
-board                         # read it   (board -f follows live)
+pi          # the app. all of it.
+/model      # the council — your box, plus every cloud key you have set
+/tree       # rival versions: branch, build the other one, keep one
+/compact    # run this BEFORE switching down to a smaller context window
 ```
 
-The loop: you post a task → ClaudePi builds → GrokPi challenges only if he's got
-something better → KimiPi passes one → you take it. Each worker keeps its own
-isolated session tree. Full details in [`team/`](team).
+> **Coming from the team layout?** Your keys and history live in the musketeer's
+> isolated home, not `~/.pi`. That directory is untracked, so it survives the
+> pull — move it over once, then delete it (freeze the board first if you want
+> to keep it: `cp team/board/board.md ~/km-board.md`).
+>
+> ```sh
+> mkdir -p ~/.pi/agent/sessions
+> cp -n  team/homes/grok/.pi/agent/auth.json  ~/.pi/agent/auth.json
+> cp -rn team/homes/grok/.pi/agent/sessions/. ~/.pi/agent/sessions/
+> rm -rf team ~/.local/bin/claudepi ~/.local/bin/grokpi ~/.local/bin/kimipi \
+>        ~/.local/bin/post ~/.local/bin/board
+> ```
 
 ---
 
@@ -184,6 +193,7 @@ the line of harnesses it stands at the end of, and the rules paid for in rental
 hours:
 
 - [`context/OPERATOR.md`](context/OPERATOR.md) — who you serve, and how.
+- [`context/PERSONA.md`](context/PERSONA.md) — how you work: build, challenge, judge.
 - [`context/HISTORY.md`](context/HISTORY.md) — MoR → Hermes/rig → KM1 → KM.
 - [`context/THESIS.md`](context/THESIS.md) — why now.
 - [`context/LESSONS.md`](context/LESSONS.md) — the museum distilled to rules.
@@ -198,7 +208,7 @@ Edit them, re-run `setup.sh`, and `/reload` inside pi.
 KM/
 ├── setup.sh            # the script. the point.
 ├── README.md           # this file — zero-to-hero + the pi curriculum + the thesis
-├── context/            # OPERATOR · HISTORY · THESIS · LESSONS  (loaded by pi)
+├── context/            # OPERATOR · PERSONA · HISTORY · THESIS · LESSONS  (loaded by pi)
 ├── museum/             # MoR · hermes · rig · KM1 — one honest essay per ancestor
 ├── pi/                 # models.json template + the gpu-status hello-world extension
 └── tests/              # a no-box, no-network bash suite (CI on ubuntu-latest)

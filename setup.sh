@@ -25,7 +25,7 @@ set -euo pipefail
 #  SECTION 0 — constants, paths, honest logging
 # ============================================================================
 
-KM_VERSION="1.0.0"
+KM_VERSION="1.1.0"
 RAW_URL="https://raw.githubusercontent.com/Ari6six6/KM/main/setup.sh"
 
 KM_HOME="${KM_HOME:-$HOME/.km}"
@@ -720,7 +720,7 @@ install_context() {
     # curl|bash path: fetch the context files from the repo
     src="$KM_HOME/context"; mkdir -p "$src"
     local f
-    for f in OPERATOR.md HISTORY.md THESIS.md LESSONS.md; do
+    for f in OPERATOR.md PERSONA.md HISTORY.md THESIS.md LESSONS.md; do
       curl -fsSL "${RAW_URL%setup.sh}context/$f" -o "$src/$f" 2>/dev/null || true
     done
   fi
@@ -730,11 +730,11 @@ install_context() {
     echo "# KM context — loaded by pi at startup"
     echo
     echo "This file is assembled by KM's setup.sh from context/. It tells pi who"
-    echo "the operator is, the line of harnesses it stands at the end of, and the"
-    echo "rules paid for in rental hours. Edit context/*.md in the KM repo, re-run"
-    echo "setup.sh, and /reload."
+    echo "the operator is, how it is expected to work, the line of harnesses it"
+    echo "stands at the end of, and the rules paid for in rental hours. Edit"
+    echo "context/*.md in the KM repo, re-run setup.sh, and /reload."
     echo
-    for f in OPERATOR HISTORY THESIS LESSONS; do
+    for f in OPERATOR PERSONA HISTORY THESIS LESSONS; do
       if [ -f "$src/$f.md" ]; then
         echo "---"; echo; cat "$src/$f.md"; echo
       fi
