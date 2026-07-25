@@ -204,12 +204,25 @@ say "Hardening the server"
 export DEBIAN_FRONTEND=noninteractive
 
 # Detect the real SSH port up front (we never change it — we just protect it).
+# Every command substitution here ends in `|| true`: under `set -Eeuo pipefail`
+# a probe that exits non-zero (sshd not on PATH, `sshd -T` refusing to run with
+# no host keys or a Match block, or grep finding nothing) would otherwise fire
+# the ERR trap and kill the whole script. Detection must never be fatal — worst
+# case we fall through to the safe default of 22.
 detect_ssh_port() {
-  local p
-  p="$(sshd -T 2>/dev/null | awk '$1=="port"{print $2; exit}')"
+  local p="" sshd_bin=""
+  # sshd is usually in /usr/sbin, which isn't always on root's PATH.
+  sshd_bin="$(command -v sshd 2>/dev/null || true)"
+  [[ -z "$sshd_bin" && -x /usr/sbin/sshd ]] && sshd_bin=/usr/sbin/sshd
+  # Ask the running sshd for its effective port (authoritative when it works).
+  if [[ -n "$sshd_bin" ]]; then
+    p="$("$sshd_bin" -T 2>/dev/null | awk 'tolower($1)=="port"{print $2; exit}' || true)"
+    [[ "$p" =~ ^[0-9]+$ ]] && { echo "$p"; return; }
+  fi
+  # Fall back to the config files (first explicit Port directive wins).
+  p="$(grep -rhiE '^[[:space:]]*Port[[:space:]]+[0-9]+' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/ 2>/dev/null | awk '{print $2; exit}' || true)"
   [[ "$p" =~ ^[0-9]+$ ]] && { echo "$p"; return; }
-  p="$(grep -rhiE '^[[:space:]]*Port[[:space:]]+[0-9]+' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/ 2>/dev/null | awk '{print $2; exit}')"
-  [[ "$p" =~ ^[0-9]+$ ]] && { echo "$p"; return; }
+  # Nothing said otherwise — the SSH default.
   echo 22
 }
 SSH_PORT="$(detect_ssh_port)"
