@@ -135,6 +135,48 @@ if command -v python3 >/dev/null 2>&1; then
   truthy "state.json is valid JSON" "python3 -c 'import json;json.load(open(\"$STATE\"))'"
 fi
 
+echo "== Herald: cockpit state + mask files =="
+export KM_HOME="$TMP/km"; HERALD_STATE="$KM_HOME/herald.json"; MASKS_DIR="$KM_HOME/masks"
+mkdir -p "$MASKS_DIR"
+eq "herald_get on a missing file is empty" "$(herald_get gear)" ""
+printf '{\n  "gear": "debate",\n  "mask": "archivist",\n  "seat": "xai/grok-4.5"\n}\n' > "$HERALD_STATE"
+eq "herald gear"  "$(herald_get gear)" "debate"
+eq "herald mask"  "$(herald_get mask)" "archivist"
+eq "herald seat"  "$(herald_get seat)" "xai/grok-4.5"
+printf '{\n  "gear": "drive",\n  "mask": null,\n  "seat": "km-box/glm-4.7-flash"\n}\n' > "$HERALD_STATE"
+eq "bare mask reads as null" "$(herald_get mask)" "null"
+eq "seat with a slash survives"  "$(herald_get seat)" "km-box/glm-4.7-flash"
+if command -v python3 >/dev/null 2>&1; then
+  truthy "herald.json is valid JSON" "python3 -c 'import json;json.load(open(\"$HERALD_STATE\"))'"
+fi
+# the extension writes this file; the launcher (bin/herald) reads it back with the
+# same sed idiom. Prove the two agree on the shape.
+HERALD_BIN="$HERE/../herald/bin/herald"
+truthy "herald launcher is executable" "[ -x '$HERALD_BIN' ]"
+truthy "herald launcher parses syntactically" "bash -n '$HERALD_BIN'"
+eq "launcher reads the seat the extension wrote" \
+   "$(KM_HOME="$KM_HOME" bash "$HERALD_BIN" --seat)" "herald seat: km-box/glm-4.7-flash"
+KM_HOME="$KM_HOME" bash "$HERALD_BIN" --seat xai/grok-4.5 >/dev/null
+eq "launcher --seat writes a seat setup.sh can read back" "$(herald_get seat)" "xai/grok-4.5"
+eq "  and leaves the gear alone" "$(herald_get gear)" "drive"
+eq "  and leaves a bare mask bare" "$(herald_get mask)" "null"
+printf '{\n  "gear": "empty",\n  "mask": "surveyor",\n  "seat": "a/b"\n}\n' > "$HERALD_STATE"
+KM_HOME="$KM_HOME" bash "$HERALD_BIN" --seat c/d >/dev/null
+eq "launcher --seat preserves a worn mask" "$(herald_get mask)" "surveyor"
+eq "launcher --seat preserves the gear"    "$(herald_get gear)" "empty"
+
+echo "== Herald: the shipped pieces exist =="
+truthy "herald extension ships"  "[ -f '$HERE/../pi/extensions/herald/index.ts' ]"
+truthy "herald contract ships"   "[ -f '$HERE/../herald/HERALD.md' ]"
+eq "herald is in the extension install list" \
+   "$(printf '%s\n' "${PI_EXTENSIONS[@]}" | grep -c '^herald$')" "1"
+# The spec is explicit: the base stays pi's four tools. The Herald is allowed
+# exactly two tools of its own — the mask controls — and nothing else. If this
+# list ever grows, that is a decision, not an accident.
+eq "herald registers exactly the two mask controls" \
+   "$(grep -o 'name: "[a-z_]*"' "$HERE/../pi/extensions/herald/index.ts" | sed 's/name: //;s/"//g' | sort | paste -sd, -)" \
+   "mask_create,mask_wear"
+
 echo
 echo "----------------------------------------"
 printf 'PASS %d  ·  FAIL %d\n' "$PASS" "$FAIL"

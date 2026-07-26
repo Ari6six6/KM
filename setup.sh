@@ -32,8 +32,15 @@ KM_HOME="${KM_HOME:-$HOME/.km}"
 STATE="$KM_HOME/state.json"
 TUNNEL_LOG="$KM_HOME/gpu-tunnel.log"
 
+# the Herald (orchestration layer): cockpit state, and the masks it grows
+HERALD_STATE="$KM_HOME/herald.json"
+MASKS_DIR="$KM_HOME/masks"
+
 PI_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 MODELS_JSON="$PI_DIR/models.json"
+
+# extensions we install into pi's auto-discovered path (pi/extensions/<name>/)
+PI_EXTENSIONS=(gpu-status herald)
 
 # Where the repo (context/, pi/) is read from. When run from a clone this is the
 # script's own directory; when run via curl|bash it is fetched into KM_HOME.
@@ -743,17 +750,48 @@ install_context() {
   ok "context installed → $out"
 }
 
-# copy pi/extensions (the gpu-status hello-world) into pi's auto-discovered path
+# copy pi/extensions (gpu-status, herald) into pi's auto-discovered path
 install_pi_extras() {
-  local dst="$PI_DIR/extensions/gpu-status"
-  mkdir -p "$dst"
-  if [ -n "$REPO_DIR" ] && [ -f "$REPO_DIR/pi/extensions/gpu-status/index.ts" ]; then
-    cp "$REPO_DIR/pi/extensions/gpu-status/index.ts" "$dst/index.ts"
+  local name dst
+  for name in "${PI_EXTENSIONS[@]}"; do
+    dst="$PI_DIR/extensions/$name"
+    mkdir -p "$dst"
+    if [ -n "$REPO_DIR" ] && [ -f "$REPO_DIR/pi/extensions/$name/index.ts" ]; then
+      cp "$REPO_DIR/pi/extensions/$name/index.ts" "$dst/index.ts"
+    else
+      curl -fsSL "${RAW_URL%setup.sh}pi/extensions/$name/index.ts" -o "$dst/index.ts" 2>/dev/null || true
+    fi
+    [ -f "$dst/index.ts" ] && ok "extension installed → $dst" \
+      || warn "could not install the $name extension (non-fatal)"
+  done
+}
+
+# read a field out of the Herald's cockpit state (same flat-JSON idiom as state_get)
+herald_get() { # $1=key
+  [ -f "$HERALD_STATE" ] || return 0
+  sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$HERALD_STATE" | head -1
+}
+
+# the Herald: the cockpit process (its launcher + contract) and the masks it grows.
+# The extension itself rides along in install_pi_extras; this is the process.
+install_herald() {
+  mkdir -p "$KM_HOME/bin" "$MASKS_DIR"
+  local f
+  for f in HERALD.md bin/herald; do
+    if [ -n "$REPO_DIR" ] && [ -f "$REPO_DIR/herald/$f" ]; then
+      cp "$REPO_DIR/herald/$f" "$KM_HOME/$f"
+    else
+      curl -fsSL "${RAW_URL%setup.sh}herald/$f" -o "$KM_HOME/$f" 2>/dev/null || true
+    fi
+  done
+  if [ -s "$KM_HOME/bin/herald" ] && [ -s "$KM_HOME/HERALD.md" ]; then
+    chmod +x "$KM_HOME/bin/herald"
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$KM_HOME/bin/herald" "$HOME/.local/bin/herald"
+    ok "Herald installed → herald   (gears: drive · debate · empty ·  masks: /mask)"
   else
-    curl -fsSL "${RAW_URL%setup.sh}pi/extensions/gpu-status/index.ts" -o "$dst/index.ts" 2>/dev/null || true
+    warn "could not install the Herald launcher (non-fatal) — retry with: km --herald"
   fi
-  [ -f "$dst/index.ts" ] && ok "extension installed → $dst (type /gpu-status in pi)" \
-    || warn "could not install the gpu-status extension (non-fatal)"
 }
 
 # write ~/.pi/agent/models.json pointing pi at the served endpoint (§4 incantation)
@@ -826,6 +864,7 @@ hero_card() { # $1=served_name (or DEMO)
   printf '     %s3.%s  %skm status%s          %sis the tunnel live? what is served?%s\n' "$C_B" "$C_0" "$C_C" "$C_0" "$C_D" "$C_0"
   printf '\n'
   printf '     served model: %s%s%s   ·   manage: %skm watch / km down / km off%s\n' "$C_B" "$served" "$C_0" "$C_D" "$C_0"
+  printf '     cockpit: %sherald%s  %s— gears: drive · debate · empty. Masks grow when you need one.%s\n' "$C_C" "$C_0" "$C_D" "$C_0"
   printf '     (if %skm%s is not found yet, open a new shell, or use %sbash ~/.km/setup.sh%s)\n\n' "$C_C" "$C_0" "$C_C" "$C_0"
 }
 
@@ -1009,6 +1048,13 @@ cmd_check() {
   else warn "no context package at $PI_DIR/AGENTS.md"; fi
   if [ -f "$PI_DIR/extensions/gpu-status/index.ts" ]; then ok "gpu-status extension installed"
   else warn "no gpu-status extension at $PI_DIR/extensions/gpu-status/"; fi
+  if [ -f "$PI_DIR/extensions/herald/index.ts" ] && [ -x "$KM_HOME/bin/herald" ]; then
+    local gear mask nmasks
+    gear="$(herald_get gear)"; mask="$(herald_get mask)"
+    [ "$mask" = "null" ] && mask=""   # bare: no mask worn
+    nmasks="$(ls -1 "$MASKS_DIR" 2>/dev/null | wc -l | tr -d ' ')"
+    ok "Herald installed (gear ${gear:-drive} · mask ${mask:-none} · ${nmasks:-0} mask(s) grown)"
+  else warn "no Herald — install with: km --herald"; fi
   if [ "$(state_get served)" = "true" ]; then
     local pid lp; pid="$(state_get tunnel_pid)"; lp="$(state_get local_port)"
     if tunnel_alive "$pid"; then ok "tunnel live (pid $pid)"
@@ -1022,18 +1068,39 @@ cmd_check() {
   [ "$fail" -eq 0 ] && { ok "all green"; exit 0; } || { erro "check found problems"; exit 1; }
 }
 
+# Install just the orchestration layer. Safe on a live box: it touches the Herald
+# and the extensions only, never models.json or the tunnel.
+cmd_herald() {
+  step "installing the Herald (cockpit + masks)…"
+  ensure_node
+  ensure_pi
+  install_pi_extras
+  install_herald
+  info "  gears:  drive · debate · empty   (type the word, or /drive /debate /empty)"
+  info "  masks:  /mask · /mask new <name> <what it is for>   — none exist until you need one"
+  ok "type: herald"
+}
+
 cmd_uninstall() {
+  local keep ext
   step "reversing KM…"
   if _reload_cargs; then stop_server || true; fi
   kill_tunnel "$(state_get tunnel_pid)" 2>/dev/null || true
-  rm -f "$HOME/.local/bin/km"
+  # Masks are hand-grown by the Operator and live under KM_HOME. A clean reversal
+  # removes KM, not the Operator's work — copy them out before the rm.
+  if [ -d "$MASKS_DIR" ] && [ -n "$(ls -A "$MASKS_DIR" 2>/dev/null)" ]; then
+    keep="$HOME/km-masks-$(date +%Y%m%d-%H%M%S)"
+    if cp -r "$MASKS_DIR" "$keep" 2>/dev/null; then info "  masks kept → $keep"
+    else warn "  could not save $MASKS_DIR — it goes with $KM_HOME"; fi
+  fi
+  rm -f "$HOME/.local/bin/km" "$HOME/.local/bin/herald"
   rm -rf "$KM_HOME"
   if [ -f "$MODELS_JSON" ] && grep -q '"km-box"' "$MODELS_JSON"; then
     rm -f "$MODELS_JSON"; info "  removed $MODELS_JSON (km-box provider)"
   fi
   rm -f "$PI_DIR/AGENTS.md"
-  rm -rf "$PI_DIR/extensions/gpu-status"
-  info "  KM state, tunnel, km shim, models.json, context and extension removed."
+  for ext in "${PI_EXTENSIONS[@]}"; do rm -rf "${PI_DIR:?}/extensions/$ext"; done
+  info "  KM state, tunnel, km + herald shims, models.json, context and extensions removed."
   info "  pi and Node were left installed (uninstall pi with: npm uninstall -g @earendil-works/pi-coding-agent)."
   ok "done."
 }
@@ -1056,6 +1123,11 @@ ${C_B}Manage (after first run — also available as the ${C_C}km${C_0}${C_B} com
   setup.sh --reconnect              re-open the tunnel to the last box
   setup.sh --off                    drop the tunnel (leave the server running)
   setup.sh --down                   stop the server AND drop the tunnel
+
+${C_B}The Herald (cockpit — one process, three gears, masks it grows itself):${C_0}
+  herald                            start it   (gears: drive · debate · empty)
+  herald --seat <model>             assign the seat (default xai/grok-4.5; any model may hold it)
+  setup.sh --herald                 (re)install the Herald alone, without touching the box
 
 ${C_B}Utility:${C_0}
   setup.sh --check                  verify install (meaningful exit codes)
@@ -1087,6 +1159,7 @@ main() {
       --off|off)              action="off"; shift ;;
       --down|down)            action="down"; shift ;;
       --check|check)          action="check"; shift ;;
+      --herald|herald)        action="herald"; shift ;;
       --uninstall|uninstall)  action="uninstall"; shift ;;
       -h|--help|help)         usage; exit 0 ;;
       *) erro "unknown argument: $1"; echo; usage; exit 2 ;;
@@ -1109,6 +1182,7 @@ main() {
     off)       cmd_off; exit 0 ;;
     down)      cmd_down; exit 0 ;;
     check)     cmd_check ;;
+    herald)    cmd_herald; exit 0 ;;
     uninstall) cmd_uninstall; exit 0 ;;
   esac
 
@@ -1125,6 +1199,7 @@ main() {
     fi
     install_context
     install_pi_extras
+    install_herald
     wire_models_json "${M_SERVED[$model]}" "" "${M_BEYOND[$model]}"
     STATE_SERVED=false STATE_MODEL="${M_SERVED[$model]}" STATE_MODEL_KEY="$model" save_state
     ok "harness ready (DEMO until a box attaches)."
@@ -1134,6 +1209,7 @@ main() {
 
   install_context
   install_pi_extras
+  install_herald
   # shellcheck disable=SC2206
   read -r -a SSH_ARGS <<< "$gpu_str"
   gpu_flow "$model"

@@ -1,7 +1,8 @@
 # pi/ — KM's extras for the harness
 
-Two things live here: the models.json incantation that points pi at the box, and
-a hello-world extension that teaches you to write your own.
+Three things live here: the models.json incantation that points pi at the box, a
+hello-world extension that teaches you to write your own, and the Herald — KM's
+orchestration layer.
 
 `setup.sh` installs both for you. This directory is the annotated original —
 edit it, re-run `setup.sh`, and `/reload` inside pi.
@@ -48,3 +49,20 @@ Inside pi, type `/gpu-status`. To hack on it: edit `index.ts`, then `/reload`.
 
 Package it and share it later with `pi` packages (`pi install git:…`); see pi's
 `packages.md`.
+
+---
+
+## `extensions/herald/` — the orchestration layer
+
+The other end of the scale from gpu-status: the extension behind the
+[cockpit](../herald). It holds the three gears (`/drive`, `/debate`, `/empty`),
+wears and grows persona-masks, and gates which of pi's *existing* tools are
+switched on. It registers exactly two tools of its own — `mask_create` and
+`mask_wear` — and changes nothing about `read`, `write`, `edit`, `bash`, or pi's
+agent loop.
+
+Worth reading as a second lesson after gpu-status: it uses `resources_discover`
+to hand pi a whole skill directory, `before_agent_start` to rewrite the system
+prompt per turn, `setActiveTools` to change the surface without touching the
+tools, and a dynamic `import()` to load a mask's TypeScript the moment it is
+first worn. The launcher and the contract live in [`herald/`](../herald).

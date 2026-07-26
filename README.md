@@ -56,6 +56,8 @@ pi                                                    # start working
 km status                                             # is the tunnel live? what's served?
 ```
 
+Or type `herald` and fly the [cockpit](#the-herald--the-cockpit) instead.
+
 If you time it, rental receipt → first agent turn should be under ten minutes of
 your own typing — most of it the one-time model download.
 
@@ -67,6 +69,52 @@ curl -fsSL https://raw.githubusercontent.com/Ari6six6/KM/main/setup.sh | bash -s
 
 Installs pi and the context package with cloud keys only. **Honesty law:** the
 served model is labelled `DEMO` until a real box attaches.
+
+---
+
+## The Herald — the cockpit
+
+`pi` is the harness. **The Herald is the seat you fly it from** — one top-level
+process that is your sole interface to the box, model-agnostic, with three hard
+gears and a live path to personas.
+
+```sh
+herald                              # start the cockpit
+herald --seat km-box/glm-4.7-flash  # any model can hold the seat (default: xai/grok-4.5)
+```
+
+**Three gears.** They outrank everything below them: shifting interrupts a
+running skill, a mask mid-thought, a tool call about to land.
+
+| Gear | |
+|------|--|
+| **Drive** | The Herald acts — decides, runs skills, wears masks, grows new ones. |
+| **Debate** | Everything stops. Tools off. It talks with you and does nothing else. |
+| **Empty** | Freewheel. No driving, no debating. |
+
+Shift with `/drive`, `/debate`, `/empty`, or just type the bare word `drive`,
+`debate`, `empty` — because the cockpit has to fly from a phone, and hunting for
+`/` on a soft keyboard is the whole friction. The gear persists in
+`~/.km/herald.json`; `km --check` prints it.
+
+**Masks grow, they don't ship.** A mask is a persona the Herald wears — one at a
+time, one box, one GPU. **You start with zero, and that is correct.** No roster,
+no starter pack, no fixed number. When a session shows a real need for a
+different head, you ask for one and *the model writes it*:
+
+```sh
+/mask new archivist keeps the museum honest    # you ask
+                                               # the Herald designs it and calls mask_create
+/mask wear archivist                           # wearable immediately, on the live box
+```
+
+That writes `~/.km/masks/archivist/SKILL.md` — an ordinary pi skill, registered
+with pi, listed alongside everything else. A mask that needs tools of its own
+gets a `tools.ts` next to it, also written by the model, imported the moment the
+mask is first worn. You never write TypeScript by hand.
+
+Nothing here touches pi's four core tools or its agent loop; the Herald only
+switches existing tools on and off. Full details in [`herald/`](herald).
 
 ---
 
@@ -109,6 +157,7 @@ km reconnect     # re-open the tunnel to the last box
 km off           # drop the tunnel (leave the server running on the box)
 km down          # stop the server AND drop the tunnel
 km --check       # verify the whole install; meaningful exit codes
+km --herald      # (re)install the cockpit alone — safe on a live box
 km --list-models # print the model catalog
 km --uninstall   # clean reversal
 ```
@@ -199,8 +248,9 @@ KM/
 ├── setup.sh            # the script. the point.
 ├── README.md           # this file — zero-to-hero + the pi curriculum + the thesis
 ├── context/            # OPERATOR · HISTORY · THESIS · LESSONS  (loaded by pi)
+├── herald/             # the cockpit — launcher + contract (gears, masks)
 ├── museum/             # MoR · hermes · rig · KM1 — one honest essay per ancestor
-├── pi/                 # models.json template + the gpu-status hello-world extension
+├── pi/                 # models.json template + the gpu-status and herald extensions
 └── tests/              # a no-box, no-network bash suite (CI on ubuntu-latest)
 ```
 

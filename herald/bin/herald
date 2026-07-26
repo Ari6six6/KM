@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+#
+# herald — the cockpit. One top-level process, the Operator's sole interface.
+#
+# A thin wrapper over `pi`: it appends the Herald contract to pi's own system
+# prompt (never replaces it — the four core tools keep their instructions) and
+# seats a model. Everything else is the herald extension, which pi discovers at
+# ~/.pi/agent/extensions/herald/.
+#
+#   herald                      start the cockpit
+#   herald --seat <model>       change the seat and exit (e.g. xai/grok-4.5, km-box/glm-4.7-flash)
+#   herald --seat              print the current seat and exit
+#   herald <anything else>      passed straight through to pi
+#
+set -euo pipefail
+
+KM_HOME="${KM_HOME:-$HOME/.km}"
+PI_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+STATE="$KM_HOME/herald.json"
+DEFAULT_SEAT="xai/grok-4.5"
+
+# Resolve through symlinks: this script is linked into ~/.local/bin, and the
+# contract sits next to its real parent (herald/HERALD.md in a clone,
+# ~/.km/HERALD.md once installed).
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  _target="$(readlink "$SELF")"
+  case "$_target" in
+    /*) SELF="$_target" ;;
+    *)  SELF="$(dirname "$SELF")/$_target" ;;
+  esac
+done
+HERALD_ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+CONTRACT="$HERALD_ROOT/HERALD.md"
+
+# same flat-JSON reader KM uses for state.json — no jq dependency
+_state_get() { # $1=key
+  [ -f "$STATE" ] || return 0
+  sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$STATE" | head -1
+}
+
+_state_set_seat() { # $1=seat — rewrite the file, preserving gear and mask
+  local gear mask seat="$1"
+  gear="$(_state_get gear)"; gear="${gear:-drive}"
+  mask="$(_state_get mask)"
+  mkdir -p "$KM_HOME"
+  if [ -z "$mask" ] || [ "$mask" = "null" ]; then mask="null"; else mask="\"$mask\""; fi
+  printf '{\n  "gear": "%s",\n  "mask": %s,\n  "seat": "%s"\n}\n' "$gear" "$mask" "$seat" > "$STATE"
+}
+
+# --seat: read or write the seat, then exit. Model-agnostic by design — the seat
+# is just a pi model pattern, and any model may hold it.
+if [ "${1:-}" = "--seat" ]; then
+  if [ -n "${2:-}" ]; then
+    _state_set_seat "$2"
+    echo "herald seat → $2"
+  else
+    seat="$(_state_get seat)"
+    echo "herald seat: ${seat:-$DEFAULT_SEAT}"
+  fi
+  exit 0
+fi
+
+[ -f "$CONTRACT" ] || { echo "herald: contract not found at $CONTRACT — re-run: km --herald" >&2; exit 1; }
+
+seat="${KM_HERALD_SEAT:-$(_state_get seat)}"
+seat="${seat:-$DEFAULT_SEAT}"
+
+# If the caller picked a model themselves, theirs wins and we add nothing.
+caller_set_model=0
+for arg in "$@"; do
+  case "$arg" in --model|--model=*|--provider|--provider=*) caller_set_model=1 ;; esac
+done
+
+# The default seat is xAI's Grok. If there is no xAI credential, do not fail and
+# do not pretend — drop the seat and let pi fall back to its own default, which
+# on a provisioned box is the model you are paying for.
+seat_args=()
+if [ "$caller_set_model" -eq 0 ]; then
+  case "$seat" in
+    xai/*)
+      if [ -n "${XAI_API_KEY:-}" ] || grep -q '"xai"' "$PI_DIR/auth.json" 2>/dev/null; then
+        seat_args=(--model "$seat")
+      else
+        echo "herald: no XAI_API_KEY — leaving the seat to pi's default model (set one, or: herald --seat km-box/<model>)" >&2
+      fi
+      ;;
+    *) seat_args=(--model "$seat") ;;
+  esac
+fi
+
+exec pi --append-system-prompt "$(cat "$CONTRACT")" "${seat_args[@]+"${seat_args[@]}"}" "$@"
