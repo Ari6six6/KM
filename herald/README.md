@@ -111,6 +111,42 @@ and exposes them as `/skill:archivist` too. Nothing bespoke to learn.
 
 ---
 
+## The agent — one name, one file you write
+
+A mask changes who the Herald *is*. The agent is someone **else**: one separate
+`pi`, summoned from Drive with a single task, while the Herald keeps the cockpit.
+
+There is exactly one, it has a fixed name (`smith` unless you set `KM_AGENT`),
+and it is configured by **one file that you write by hand**:
+
+```
+~/karte/callcenter.md
+```
+
+That is the whole design. On every summon the agent is told three things — its
+name, to read that file before anything else, and the task. Everything else it
+knows about its role and the current work, you put in the file. There is no
+generated persona, no orientation package, and nothing for the Herald to write
+on your behalf. Growing the agent means editing `callcenter.md`.
+
+```sh
+/agent                    # (inside the Herald) its name, and the file it reads
+```
+
+The agent runs with the four core tools (`read`, `write`, `edit`, `bash`) and
+nothing else: no extensions, no `AGENTS.md`, no session saved. That is deliberate
+— the call-center file can only be the source of truth if nothing loads behind
+it. It runs on pi's default model (on a provisioned box, the one you own);
+`KM_AGENT_MODEL` overrides that.
+
+`km` creates `~/karte/callcenter.md` once, with three lines saying it is yours.
+After that KM never writes to it, and `km --uninstall` leaves `~/karte` alone.
+
+> The agent does not see your conversation with the Herald. Whatever the job
+> needs goes in the task; whatever the agent *is* goes in the file.
+
+---
+
 ## What this does not do
 
 Deliberately, per the brief:
@@ -119,7 +155,10 @@ Deliberately, per the brief:
 - **No changes to pi's four tools** (`read`, `write`, `edit`, `bash`) or its agent
   loop. The Herald only switches existing tools on and off.
 - **No fixed roster of masks.** Growth happens on need, in a running session.
-- **No UI beyond the gears and mask creation.** A status line, and words you type.
+- **No team of agents.** One name, summoned one task at a time. If you want a
+  second, that is a decision you make later, not a framework you get now.
+- **No UI beyond the gears, mask creation, and the summon.** A status line, and
+  words you type.
 
 ---
 

@@ -171,11 +171,46 @@ truthy "herald contract ships"   "[ -f '$HERE/../herald/HERALD.md' ]"
 eq "herald is in the extension install list" \
    "$(printf '%s\n' "${PI_EXTENSIONS[@]}" | grep -c '^herald$')" "1"
 # The spec is explicit: the base stays pi's four tools. The Herald is allowed
-# exactly two tools of its own — the mask controls — and nothing else. If this
-# list ever grows, that is a decision, not an accident.
-eq "herald registers exactly the two mask controls" \
+# the two mask controls and the one summon, and nothing else. If this list ever
+# grows, that is a decision, not an accident.
+eq "herald registers exactly the mask controls and the summon" \
    "$(grep -o 'name: "[a-z_]*"' "$HERE/../pi/extensions/herald/index.ts" | sed 's/name: //;s/"//g' | sort | paste -sd, -)" \
-   "mask_create,mask_wear"
+   "agent_summon,mask_create,mask_wear"
+
+# The summon's contract with the child, in four flags. Each one is load-bearing:
+# drop --no-extensions and the cockpit loads in the agent and switches its tools
+# off; drop --no-context-files and AGENTS.md loads behind the call-center file,
+# which then is not the source of truth. detached is what makes the gear hard —
+# abort signals the group, so the agent's own children die with it.
+HERALD_TS="$HERE/../pi/extensions/herald/index.ts"
+has "summon gives the agent the four core tools" "$(cat "$HERALD_TS")" '"read,write,edit,bash"'
+has "summon keeps the cockpit out of the child"  "$(cat "$HERALD_TS")" '"--no-extensions"'
+has "summon keeps AGENTS.md out of the child"    "$(cat "$HERALD_TS")" '"--no-context-files"'
+has "summon spawns the agent in its own group"   "$(cat "$HERALD_TS")" "detached: true"
+has "abort signals the group, not just the pi"   "$(cat "$HERALD_TS")" "process.kill(-pid, sig)"
+has "the extension stands down inside an agent"  "$(cat "$HERALD_TS")" 'process.env.KM_HERALD_CHILD === "1"'
+
+echo "== the agent: call-center file and the parked improvisation =="
+export KM_KARTE="$TMP/karte"; KARTE_DIR="$KM_KARTE"; CALLCENTER="$KARTE_DIR/callcenter.md"
+KM_AGENT="smith"; PARKED_DIR="$KM_HOME/parked"
+install_callcenter >/dev/null
+truthy "install_callcenter creates the map directory" "[ -d '$KARTE_DIR' ]"
+truthy "install_callcenter creates the call-center file" "[ -f '$CALLCENTER' ]"
+has "  and names the agent in it" "$(cat "$CALLCENTER")" "smith"
+# The Operator curates this file by hand. A re-run must never write over it.
+printf 'MINE — do not touch\n' > "$CALLCENTER"
+install_callcenter >/dev/null
+eq "a second install leaves the Operator's file alone" "$(cat "$CALLCENTER")" "MINE — do not touch"
+
+# The improvised subagent extension is moved aside, not deleted.
+mkdir -p "$PI_DIR/extensions/subagent" "$PI_DIR/extensions/gpu-status"
+printf 'improvised\n' > "$PI_DIR/extensions/subagent/index.ts"
+park_improvised_subagents >/dev/null
+falsy "park removes the improvised subagent from pi's path" "[ -d '$PI_DIR/extensions/subagent' ]"
+truthy "park keeps our own extensions" "[ -d '$PI_DIR/extensions/gpu-status' ]"
+eq "park moves it aside rather than deleting it" \
+   "$(cat "$PARKED_DIR"/subagent-*/index.ts 2>/dev/null)" "improvised"
+truthy "park is a no-op when there is nothing to park" "park_improvised_subagents"
 
 echo
 echo "----------------------------------------"

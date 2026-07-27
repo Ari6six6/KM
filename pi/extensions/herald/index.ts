@@ -7,6 +7,8 @@
 //   1. hold a gear   — drive / debate / empty, top-priority, interrupts anything
 //   2. wear a mask   — inject a persona (and its tools) for the next turn(s)
 //   3. grow a mask   — let the model write a new one, live, while the box runs
+//   4. summon the agent — hand one task to a separate pi that reads the
+//      Operator's own file and takes everything from it
 //
 // State lives in $KM_HOME/herald.json; masks live in $KM_HOME/masks/<name>/ as
 // ordinary pi skills, so pi discovers them itself (see resources_discover).
@@ -15,9 +17,10 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // ---------------------------------------------------------------- paths + state
@@ -26,6 +29,14 @@ const KM_HOME = process.env.KM_HOME ?? join(homedir(), ".km");
 const MASKS_DIR = join(KM_HOME, "masks");
 const STATE_FILE = join(KM_HOME, "herald.json");
 const DEFAULT_SEAT = "xai/grok-4.5";
+
+// The Operator's map (German: Karte) and the single file inside it that the
+// summoned agent reads before it does anything else. Both are the Operator's:
+// we create them once and never write over what he has put there.
+const KARTE_DIR = process.env.KM_KARTE ?? join(homedir(), "karte");
+const CALLCENTER = process.env.KM_CALLCENTER ?? join(KARTE_DIR, "callcenter.md");
+const AGENT_NAME = process.env.KM_AGENT ?? "smith";
+const PI_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 
 type Gear = "drive" | "debate" | "empty";
 const GEARS: Gear[] = ["drive", "debate", "empty"];
@@ -139,6 +150,151 @@ function listMasks(): string[] {
 
 const oneLine = (s: string): string => s.replace(/\s+/g, " ").trim();
 
+// ------------------------------------------------------------------- the agent
+//
+// One named agent, summoned on demand. It is a separate `pi` with the four core
+// tools and a three-line brief: know your name, read the Operator's file, do the
+// task. Everything it needs to know about itself and the work lives in that
+// file, written by hand. There is no generated persona here and there must never
+// be one — growing the agent means the Operator editing callcenter.md.
+
+// Make the map directory, and the file if it is missing. A file that already
+// exists is left exactly as it is: what is in there is the Operator's.
+function ensureCallcenter(): boolean {
+  mkdirSync(dirname(CALLCENTER), { recursive: true });
+  if (existsSync(CALLCENTER)) return false;
+  writeFileSync(
+    CALLCENTER,
+    [
+      "# callcenter",
+      "",
+      `The Operator writes here. \`${AGENT_NAME}\` reads this file first on every summon:`,
+      "who it is for this job, the context it needs, and the work in front of it.",
+      "Nothing else configures the agent.",
+      "",
+    ].join("\n"),
+  );
+  return true;
+}
+
+// An older improvised sub-agent extension, still loaded, fires on Drive next to
+// agent_summon — two paths summoning two different things. `km --herald` parks
+// it; by the time we run here pi has already loaded it, so all we can honestly
+// do is say so, and say exactly what fixes it.
+function improvisedSubagents(): string[] {
+  const dir = join(PI_DIR, "extensions");
+  if (!existsSync(dir)) return [];
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && /sub-?agent/i.test(e.name))
+      .map((e) => e.name);
+  } catch {
+    return [];
+  }
+}
+
+function agentBrief(): string {
+  return [
+    `You are ${AGENT_NAME}.`,
+    `Before anything else, read ${CALLCENTER}. The Operator maintains that file by hand and it is the only source of truth about your role and the current work.`,
+    "Then carry out the task you were given and report back plainly.",
+  ].join("\n");
+}
+
+// pi launched us, so pi is reachable — through the script we are running under
+// when there is one (a bun-compiled pi has no such script), else off the PATH,
+// which setup.sh guarantees.
+function piInvocation(args: string[]): { command: string; args: string[] } {
+  const script = process.argv[1];
+  if (script && !script.startsWith("/$bunfs/") && existsSync(script))
+    return { command: process.execPath, args: [script, ...args] };
+  return { command: "pi", args };
+}
+
+interface SummonResult {
+  code: number;
+  out: string;
+  err: string;
+}
+
+function summon(task: string, signal?: AbortSignal): Promise<SummonResult> {
+  const args = [
+    "-p",
+    "--no-session",
+    // The four core tools, and nothing but them.
+    "--tools",
+    "read,write,edit,bash",
+    // No extensions: the cockpit must not load in the child, or the gear it
+    // inherits would switch those four tools straight back off.
+    "--no-extensions",
+    // No AGENTS.md, no CLAUDE.md. The call-center file is the source of truth,
+    // and it can only be that if nothing else is loaded behind it.
+    "--no-context-files",
+    "--append-system-prompt",
+    agentBrief(),
+  ];
+  // No model by default: the agent runs on pi's default, which on a provisioned
+  // box is the model you already pay for. KM_AGENT_MODEL overrides it.
+  if (process.env.KM_AGENT_MODEL) args.push("--model", process.env.KM_AGENT_MODEL);
+  args.push(task);
+
+  const { command, args: argv } = piInvocation(args);
+  return new Promise<SummonResult>((resolve) => {
+    // --no-extensions already keeps the cockpit out of this child; the env flag
+    // is the backstop that reaches further, so a `pi` the agent itself starts
+    // from bash also comes up bare instead of inheriting a gear.
+    //
+    // detached puts the agent in its own process group. That is what makes the
+    // gear hard: signalling -pid takes down the whole tree, including whatever
+    // the agent started from bash. Signal the pi alone and its children live on,
+    // holding these pipes open, and an abort waits for work nobody wants.
+    const child = spawn(command, argv, {
+      env: { ...process.env, KM_HERALD_CHILD: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+    });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d: Buffer) => { out += d.toString(); });
+    child.stderr.on("data", (d: Buffer) => { err += d.toString(); });
+    child.on("error", (e: Error) => resolve({ code: 1, out, err: `${err}${e.message}` }));
+    // A killed agent exits on a signal with no code. Say so — an interrupted
+    // summon reporting a clean run with no output is the kind of quiet lie this
+    // box does not tell.
+    child.on("close", (code: number | null, sig: NodeJS.Signals | null) =>
+      resolve({
+        code: code ?? (sig ? 143 : 0),
+        out,
+        err: sig ? `${err}\nsummon stopped (${sig}).` : err,
+      }),
+    );
+
+    if (signal) {
+      const signalTree = (sig: NodeJS.Signals): void => {
+        const pid = child.pid;
+        if (pid === undefined) return;
+        try {
+          process.kill(-pid, sig);
+        } catch {
+          try { child.kill(sig); } catch { /* already gone */ }
+        }
+      };
+      const kill = (): void => {
+        signalTree("SIGTERM");
+        setTimeout(() => {
+          signalTree("SIGKILL");
+          // Anything still holding the pipes open after a group SIGKILL is not
+          // something to keep the Operator waiting on. Resolving twice is a
+          // no-op; the close handler wins whenever it gets there first.
+          resolve({ code: 143, out, err: `${err}\nsummon aborted.` });
+        }, 2000).unref();
+      };
+      if (signal.aborted) kill();
+      else signal.addEventListener("abort", kill, { once: true });
+    }
+  });
+}
+
 // ------------------------------------------------------- the prompt the gear adds
 
 function gearContract(gear: Gear): string {
@@ -166,6 +322,10 @@ function maskContract(mask: Mask): string {
 const HERALD_TOOLS = ["mask_create", "mask_wear"];
 
 export default function (pi: ExtensionAPI) {
+  // Inside a summoned agent (or any pi it starts itself), stand down: no gear
+  // switches its tools off, no mask speaks for it, and it summons nothing.
+  if (process.env.KM_HERALD_CHILD === "1") return;
+
   let state = readState();
   // pi's tool surface as the Operator launched it — the four core tools plus
   // whatever else was configured. We restore exactly this; we never edit it.
@@ -253,6 +413,7 @@ export default function (pi: ExtensionAPI) {
       `Herald · gear ${gearLabel(state.gear)} · seat ${state.seat}`,
       `  mask:  ${state.mask ?? "(bare — the four core tools, nothing added)"}`,
       `  masks: ${masks.length ? masks.join(", ") : "none yet — /mask new <name> <what it is for>"}`,
+      `  agent: ${AGENT_NAME} — reads ${CALLCENTER}${existsSync(CALLCENTER) ? "" : " (not written yet)"}`,
       `  gears: /drive  /debate  /empty   (or just type: drive · debate · empty)`,
     ];
   }
@@ -273,6 +434,13 @@ export default function (pi: ExtensionAPI) {
     else applyTools(ctx);
     writeState(state); // so the launcher and `km status` can see the cockpit from the first run
     paint(ctx);
+
+    const improvised = improvisedSubagents();
+    if (improvised.length > 0 && ctx.hasUI)
+      ctx.ui.notify(
+        `${improvised.join(", ")} is still loaded in ${join(PI_DIR, "extensions")} and will fire on Drive alongside ${AGENT_NAME}. Park it: km --herald`,
+        "warning",
+      );
   });
 
   // Masks are ordinary pi skills, so pi registers and lists them itself.
@@ -350,6 +518,20 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("herald", {
     description: "The cockpit: gear, seat, worn mask, and the masks you have grown",
     handler: async (_args, ctx) => ctx.ui.notify(statusLines().join("\n"), "info"),
+  });
+
+  pi.registerCommand("agent", {
+    description: `The agent: ${AGENT_NAME}, and the Operator file it reads on every summon`,
+    handler: async (_args, ctx) =>
+      ctx.ui.notify(
+        [
+          `Agent · ${AGENT_NAME}`,
+          `  reads: ${CALLCENTER}${existsSync(CALLCENTER) ? "" : "   (not there yet — created on the first summon)"}`,
+          "  tools: read, write, edit, bash",
+          "  summon: ask the Herald, in Drive. Everything else the agent knows, you write in that file.",
+        ].join("\n"),
+        "info",
+      ),
   });
 
   pi.registerCommand("mask", {
@@ -437,6 +619,44 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ----------------------------------------------------------------------- tools
+
+  pi.registerTool({
+    name: "agent_summon",
+    label: `Summon ${AGENT_NAME}`,
+    description:
+      `Summon ${AGENT_NAME}, the Operator's named agent, and hand it exactly one task. It is a separate pi run with the four core tools (read, write, edit, bash). It reads ${CALLCENTER} first — the Operator's own file — and takes its role and its context from there, not from you. Use it to hand off a self-contained job while the Herald keeps the cockpit.`,
+    promptSnippet: `Summon ${AGENT_NAME} and hand it one task`,
+    promptGuidelines: [
+      `${AGENT_NAME} does not see this conversation. Put everything the task needs into the task text; everything about who ${AGENT_NAME} is belongs in ${CALLCENTER}, which only the Operator writes.`,
+    ],
+    parameters: Type.Object({
+      task: Type.String({
+        description: "The task, in plain words, self-contained. The agent sees only this text and its call-center file.",
+      }),
+    }),
+    async execute(_id, params, signal, _onUpdate, _ctx) {
+      const task = params.task.trim();
+      if (!task)
+        return { content: [{ type: "text", text: "agent_summon needs a task." }], isError: true, details: {} };
+
+      const seeded = ensureCallcenter();
+      const { code, out, err } = await summon(task, signal);
+      const text = out.trim();
+      const note = seeded ? `\n\n(${CALLCENTER} did not exist — an empty one was created for the Operator to write.)` : "";
+
+      if (code !== 0)
+        return {
+          content: [{ type: "text", text: `${AGENT_NAME} exited ${code}.\n${(err || text).trim() || "(no output)"}${note}` }],
+          isError: true,
+          details: { agent: AGENT_NAME, code },
+        };
+
+      return {
+        content: [{ type: "text", text: `${text || "(no output)"}${note}` }],
+        details: { agent: AGENT_NAME, code, callcenter: CALLCENTER },
+      };
+    },
+  });
 
   pi.registerTool({
     name: "mask_create",
