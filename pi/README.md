@@ -57,12 +57,15 @@ Package it and share it later with `pi` packages (`pi install git:…`); see pi'
 The other end of the scale from gpu-status: the extension behind the
 [cockpit](../herald). It holds the three gears (`/drive`, `/debate`, `/empty`),
 wears and grows persona-masks, and gates which of pi's *existing* tools are
-switched on. It registers exactly two tools of its own — `mask_create` and
-`mask_wear` — and changes nothing about `read`, `write`, `edit`, `bash`, or pi's
-agent loop.
+switched on. It registers three tools of its own — `mask_create`, `mask_wear`,
+and `agent_summon` — and changes nothing about `read`, `write`, `edit`, `bash`,
+or pi's agent loop.
 
 Worth reading as a second lesson after gpu-status: it uses `resources_discover`
 to hand pi a whole skill directory, `before_agent_start` to rewrite the system
 prompt per turn, `setActiveTools` to change the surface without touching the
 tools, and a dynamic `import()` to load a mask's TypeScript the moment it is
-first worn. The launcher and the contract live in [`herald/`](../herald).
+first worn. `agent_summon` is the fourth lesson: a tool that shells out to a
+second `pi` (`-p --no-session --tools read,write,edit,bash --no-extensions
+--no-context-files`) and honours the tool's `AbortSignal`, so a gear shift kills
+the child. The launcher and the contract live in [`herald/`](../herald).

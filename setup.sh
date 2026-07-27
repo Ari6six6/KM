@@ -36,6 +36,16 @@ TUNNEL_LOG="$KM_HOME/gpu-tunnel.log"
 HERALD_STATE="$KM_HOME/herald.json"
 MASKS_DIR="$KM_HOME/masks"
 
+# The Operator's map (German: Karte) and the one file inside it the summoned
+# agent reads before it does anything else. This is Operator space: KM creates
+# it once, and from then on only the Operator writes here.
+KARTE_DIR="${KM_KARTE:-$HOME/karte}"
+CALLCENTER="${KM_CALLCENTER:-$KARTE_DIR/callcenter.md}"
+KM_AGENT="${KM_AGENT:-smith}"
+
+# Anything KM moves out of the way rather than deletes lands here, with a stamp.
+PARKED_DIR="$KM_HOME/parked"
+
 PI_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 MODELS_JSON="$PI_DIR/models.json"
 
@@ -766,6 +776,46 @@ install_pi_extras() {
   done
 }
 
+# Park anything under pi's extensions path that improvises its own sub-agents.
+# The Herald summons one named agent through agent_summon; a second, older path
+# firing on Drive is how you get two of them arguing. Moved, never deleted — it
+# may hold work, and it is not ours to throw away.
+park_improvised_subagents() {
+  local dir base parked
+  [ -d "$PI_DIR/extensions" ] || return 0
+  for dir in "$PI_DIR"/extensions/*subagent*/ "$PI_DIR"/extensions/*sub-agent*/; do
+    [ -d "$dir" ] || continue          # unmatched globs come back literal
+    base="$(basename "$dir")"
+    parked="$PARKED_DIR/$base-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$PARKED_DIR"
+    if mv "$dir" "$parked" 2>/dev/null; then
+      ok "parked the $base extension → $parked"
+      info "  it no longer loads. The Herald's own agent is: $KM_AGENT (see $CALLCENTER)."
+    else
+      warn "could not park $dir — disable it by hand, or Drive will still fire it"
+    fi
+  done
+  return 0
+}
+
+# The call-center file: one directory the Operator owns, one file he curates. We
+# create them if they are not there and never rewrite them if they are.
+install_callcenter() {
+  mkdir -p "$KARTE_DIR"
+  if [ -f "$CALLCENTER" ]; then
+    ok "call-center file already there → $CALLCENTER (left untouched)"
+    return 0
+  fi
+  cat > "$CALLCENTER" <<EOF
+# callcenter
+
+The Operator writes here. \`$KM_AGENT\` reads this file first on every summon:
+who it is for this job, the context it needs, and the work in front of it.
+Nothing else configures the agent.
+EOF
+  ok "call-center file created → $CALLCENTER (yours to write)"
+}
+
 # read a field out of the Herald's cockpit state (same flat-JSON idiom as state_get)
 herald_get() { # $1=key
   [ -f "$HERALD_STATE" ] || return 0
@@ -1055,6 +1105,11 @@ cmd_check() {
     nmasks="$(ls -1 "$MASKS_DIR" 2>/dev/null | wc -l | tr -d ' ')"
     ok "Herald installed (gear ${gear:-drive} · mask ${mask:-none} · ${nmasks:-0} mask(s) grown)"
   else warn "no Herald — install with: km --herald"; fi
+  if [ -f "$CALLCENTER" ]; then ok "agent $KM_AGENT reads $CALLCENTER"
+  else warn "no call-center file at $CALLCENTER — create it with: km --herald"; fi
+  if compgen -G "$PI_DIR/extensions/*subagent*" >/dev/null 2>&1; then
+    warn "an improvised subagent extension is still live in $PI_DIR/extensions — park it with: km --herald"
+  fi
   if [ "$(state_get served)" = "true" ]; then
     local pid lp; pid="$(state_get tunnel_pid)"; lp="$(state_get local_port)"
     if tunnel_alive "$pid"; then ok "tunnel live (pid $pid)"
@@ -1076,8 +1131,11 @@ cmd_herald() {
   ensure_pi
   install_pi_extras
   install_herald
+  park_improvised_subagents
+  install_callcenter
   info "  gears:  drive · debate · empty   (type the word, or /drive /debate /empty)"
   info "  masks:  /mask · /mask new <name> <what it is for>   — none exist until you need one"
+  info "  agent:  $KM_AGENT — summon it in Drive; it reads $CALLCENTER"
   ok "type: herald"
 }
 
@@ -1093,6 +1151,13 @@ cmd_uninstall() {
     if cp -r "$MASKS_DIR" "$keep" 2>/dev/null; then info "  masks kept → $keep"
     else warn "  could not save $MASKS_DIR — it goes with $KM_HOME"; fi
   fi
+  # Same rule for anything KM parked rather than deleted: it was not ours to
+  # throw away when we moved it, and it is not ours to throw away now.
+  if [ -d "$PARKED_DIR" ] && [ -n "$(ls -A "$PARKED_DIR" 2>/dev/null)" ]; then
+    keep="$HOME/km-parked-$(date +%Y%m%d-%H%M%S)"
+    if cp -r "$PARKED_DIR" "$keep" 2>/dev/null; then info "  parked extensions kept → $keep"
+    else warn "  could not save $PARKED_DIR — it goes with $KM_HOME"; fi
+  fi
   rm -f "$HOME/.local/bin/km" "$HOME/.local/bin/herald"
   rm -rf "$KM_HOME"
   if [ -f "$MODELS_JSON" ] && grep -q '"km-box"' "$MODELS_JSON"; then
@@ -1101,6 +1166,8 @@ cmd_uninstall() {
   rm -f "$PI_DIR/AGENTS.md"
   for ext in "${PI_EXTENSIONS[@]}"; do rm -rf "${PI_DIR:?}/extensions/$ext"; done
   info "  KM state, tunnel, km + herald shims, models.json, context and extensions removed."
+  # The map is the Operator's, written by hand. Reversing KM does not touch it.
+  if [ -e "$KARTE_DIR" ]; then info "  left alone: $KARTE_DIR — it is yours, not KM's."; fi
   info "  pi and Node were left installed (uninstall pi with: npm uninstall -g @earendil-works/pi-coding-agent)."
   ok "done."
 }
@@ -1128,6 +1195,11 @@ ${C_B}The Herald (cockpit — one process, three gears, masks it grows itself):$
   herald                            start it   (gears: drive · debate · empty)
   herald --seat <model>             assign the seat (default xai/grok-4.5; any model may hold it)
   setup.sh --herald                 (re)install the Herald alone, without touching the box
+
+${C_B}The agent (one, named, summoned from Drive):${C_0}
+  $CALLCENTER
+                                    the only file that configures $KM_AGENT — you write it by hand
+  /agent                            (inside the Herald) its name and the file it reads
 
 ${C_B}Utility:${C_0}
   setup.sh --check                  verify install (meaningful exit codes)
@@ -1200,6 +1272,8 @@ main() {
     install_context
     install_pi_extras
     install_herald
+    park_improvised_subagents
+    install_callcenter
     wire_models_json "${M_SERVED[$model]}" "" "${M_BEYOND[$model]}"
     STATE_SERVED=false STATE_MODEL="${M_SERVED[$model]}" STATE_MODEL_KEY="$model" save_state
     ok "harness ready (DEMO until a box attaches)."
@@ -1210,6 +1284,8 @@ main() {
   install_context
   install_pi_extras
   install_herald
+  park_improvised_subagents
+  install_callcenter
   # shellcheck disable=SC2206
   read -r -a SSH_ARGS <<< "$gpu_str"
   gpu_flow "$model"

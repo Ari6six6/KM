@@ -113,6 +113,22 @@ with pi, listed alongside everything else. A mask that needs tools of its own
 gets a `tools.ts` next to it, also written by the model, imported the moment the
 mask is first worn. You never write TypeScript by hand.
 
+**One agent, and you write its file.** A mask changes who the Herald *is*; the
+agent is someone else — a separate `pi`, summoned from Drive with one task while
+the Herald keeps the cockpit. There is exactly one, it has a name (`smith`), and
+it is configured entirely by a file you maintain by hand:
+
+```
+~/karte/callcenter.md      # the only thing that configures the agent — yours to write
+```
+
+On every summon it is told three things: its name, to read that file first, and
+the task. Everything else it knows, you put in the file. No generated persona, no
+orientation package, nothing written on your behalf. It runs with the four core
+tools and nothing else — no extensions, no `AGENTS.md` — because the file can
+only be the source of truth if nothing loads behind it. `km --uninstall` leaves
+`~/karte` alone; it is yours, not KM's.
+
 Nothing here touches pi's four core tools or its agent loop; the Herald only
 switches existing tools on and off. Full details in [`herald/`](herald).
 
