@@ -10,7 +10,14 @@
 #   herald                      start the cockpit
 #   herald --seat <model>       change the seat and exit (e.g. xai/grok-4.5, km-box/glm-4.7-flash)
 #   herald --seat              print the current seat and exit
+#   herald --gear <gear>        set the gear from the shell and exit (drive|brake|empty)
+#   herald --gear              print the current gear and exit
 #   herald <anything else>      passed straight through to pi
+#
+# --gear is the escape hatch. The gear persists, so a box left stopped comes up
+# stopped, and a stopped cockpit does not answer prompts — that is the point of a
+# hard gear, and it is also how you lock yourself out. This un-sticks it from the
+# shell without starting the cockpit at all: herald --gear drive
 #
 set -euo pipefail
 
@@ -39,13 +46,24 @@ _state_get() { # $1=key
   sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$STATE" | head -1
 }
 
-_state_set_seat() { # $1=seat — rewrite the file, preserving gear and mask
-  local gear mask seat="$1"
-  gear="$(_state_get gear)"; gear="${gear:-drive}"
+_state_write() { # $1=gear $2=seat — rewrite the file, preserving the worn mask
+  local mask
   mask="$(_state_get mask)"
   mkdir -p "$KM_HOME"
   if [ -z "$mask" ] || [ "$mask" = "null" ]; then mask="null"; else mask="\"$mask\""; fi
-  printf '{\n  "gear": "%s",\n  "mask": %s,\n  "seat": "%s"\n}\n' "$gear" "$mask" "$seat" > "$STATE"
+  printf '{\n  "gear": "%s",\n  "mask": %s,\n  "seat": "%s"\n}\n' "$1" "$mask" "$2" > "$STATE"
+}
+
+_state_set_seat() { # $1=seat — preserve the gear
+  local gear
+  gear="$(_state_get gear)"; gear="${gear:-drive}"
+  _state_write "$gear" "$1"
+}
+
+_state_set_gear() { # $1=gear — preserve the seat
+  local seat
+  seat="$(_state_get seat)"; seat="${seat:-$DEFAULT_SEAT}"
+  _state_write "$1" "$seat"
 }
 
 # --seat: read or write the seat, then exit. Model-agnostic by design — the seat
@@ -57,6 +75,32 @@ if [ "${1:-}" = "--seat" ]; then
   else
     seat="$(_state_get seat)"
     echo "herald seat: ${seat:-$DEFAULT_SEAT}"
+  fi
+  exit 0
+fi
+
+# --gear: read or set the gear from the shell, then exit. The way back from a box
+# that came up stopped, without needing the cockpit to answer you first.
+if [ "${1:-}" = "--gear" ]; then
+  if [ -n "${2:-}" ]; then
+    case "$2" in
+      drive|brake|empty)
+        _state_set_gear "$2"
+        echo "herald gear → $2"
+        [ "$2" = "brake" ] && echo "herald: the gear is set; the checkpoint is written by the running cockpit, not from here."
+        ;;
+      debate)
+        _state_set_gear brake
+        echo "herald: debate is retired — gear → brake"
+        ;;
+      *)
+        echo "herald: unknown gear \"$2\" — drive, brake, or empty" >&2
+        exit 1
+        ;;
+    esac
+  else
+    gear="$(_state_get gear)"
+    echo "herald gear: ${gear:-drive}"
   fi
   exit 0
 fi

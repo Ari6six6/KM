@@ -48,8 +48,24 @@ where it stopped. `km --check` prints the gear.
 
 > **Debate is retired.** It was the old stop-gear: tools off, talk only. A gear
 > that cannot act is not a mode this box has any use for, and a stop that leaves
-> nothing behind is worse than no stop at all. `debate` — typed, or left in an old
-> `herald.json` — now brakes, and says so.
+> nothing behind is worse than no stop at all. Typing `debate` now brakes and says
+> so. A `debate` still sitting in an old `herald.json` is a different thing —
+> upgrade debris, with nothing running to interrupt and no checkpoint behind it —
+> so the Herald comes up in **Drive** and tells you the gear is gone. An upgrade
+> must never leave the box mute.
+
+### Locked out?
+
+The gear persists and Brake does not answer prompts. That is the point of a hard
+gear, and it is also how you lock yourself out of your own box. The way back does
+not need the cockpit to answer you:
+
+```sh
+herald --gear          # what gear is it in?
+herald --gear drive    # set it from the shell, without starting the cockpit
+```
+
+`km --check` prints the gear too, and names it if it is one this version dropped.
 
 ---
 

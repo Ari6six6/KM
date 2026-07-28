@@ -1113,8 +1113,9 @@ cmd_check() {
     local gear mask nmasks cp
     gear="$(herald_get gear)"; mask="$(herald_get mask)"
     [ "$mask" = "null" ] && mask=""   # bare: no mask worn
-    # a gear retired in a later version, still sitting in an old state file
-    [ "$gear" = "debate" ] && gear="brake (was debate — retired)"
+    # a gear retired in a later version, still sitting in an old state file: the
+    # Herald drops it into drive on the next start rather than coming up mute
+    case "$gear" in drive|brake|empty|"") : ;; *) gear="$gear → drive (retired gear)" ;; esac
     nmasks="$(ls -1 "$MASKS_DIR" 2>/dev/null | wc -l | tr -d ' ')"
     ok "Herald installed (gear ${gear:-drive} · mask ${mask:-none} · ${nmasks:-0} mask(s) grown)"
     cp="$(latest_checkpoint)"
@@ -1210,6 +1211,7 @@ ${C_B}Manage (after first run — also available as the ${C_C}km${C_0}${C_B} com
 ${C_B}The Herald (cockpit — one process, three gears, masks it grows itself):${C_0}
   herald                            start it   (gears: drive · brake · empty)
   herald --seat <model>             assign the seat (default xai/grok-4.5; any model may hold it)
+  herald --gear drive               set the gear from the shell (the way back if it came up stopped)
   setup.sh --herald                 (re)install the Herald alone, without touching the box
   brake                             (inside the Herald) stop now; the checkpoint lands in
                                     $CHECKPOINTS

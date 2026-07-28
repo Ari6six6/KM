@@ -22,7 +22,8 @@ running.
 - **Empty** — freewheel. Nothing drives, nothing is stopped mid-job.
 
 The Operator shifts with `/drive`, `/brake`, `/empty` — or by typing the bare
-word `drive`, `brake`, or `empty`, which is what they will do from a phone.
+word `drive`, `brake`, or `empty`, which is what they will do from a phone. From
+outside the cockpit, `herald --gear drive` does it without starting a session.
 
 The first time you are given a turn back in Drive, you are handed the newest
 checkpoint. Read it, say in one line what you are resuming, and carry on from

@@ -165,6 +165,26 @@ KM_HOME="$KM_HOME" bash "$HERALD_BIN" --seat c/d >/dev/null
 eq "launcher --seat preserves a worn mask" "$(herald_get mask)" "surveyor"
 eq "launcher --seat preserves the gear"    "$(herald_get gear)" "empty"
 
+# --gear is the escape hatch: a hard gear persists, a stopped cockpit does not
+# answer prompts, and that is exactly how you lock yourself out of your own box.
+# This un-sticks it from the shell, without the cockpit having to answer first.
+eq "launcher --gear reads the gear" \
+   "$(KM_HOME="$KM_HOME" bash "$HERALD_BIN" --gear)" "herald gear: empty"
+KM_HOME="$KM_HOME" bash "$HERALD_BIN" --gear drive >/dev/null
+eq "launcher --gear sets the gear"          "$(herald_get gear)" "drive"
+eq "  and preserves the worn mask"          "$(herald_get mask)" "surveyor"
+eq "  and preserves the seat"               "$(herald_get seat)" "c/d"
+KM_HOME="$KM_HOME" bash "$HERALD_BIN" --gear debate >/dev/null
+eq "launcher --gear debate lands in brake"  "$(herald_get gear)" "brake"
+falsy "launcher --gear refuses a gear that is not one" \
+      "KM_HOME='$KM_HOME' bash '$HERALD_BIN' --gear sideways"
+eq "  and leaves the gear alone"            "$(herald_get gear)" "brake"
+KM_HOME="$KM_HOME" bash "$HERALD_BIN" --gear drive >/dev/null
+if command -v python3 >/dev/null 2>&1; then
+  truthy "herald.json is still valid JSON after --gear" \
+         "python3 -c 'import json;json.load(open(\"$HERALD_STATE\"))'"
+fi
+
 echo "== Herald: the shipped pieces exist =="
 truthy "herald extension ships"  "[ -f '$HERE/../pi/extensions/herald/index.ts' ]"
 truthy "herald contract ships"   "[ -f '$HERE/../herald/HERALD.md' ]"
@@ -199,15 +219,23 @@ has "the brake writes the checkpoint itself"   "$(cat "$HERALD_TS")" "writeCheck
 has "drive is handed the open checkpoint"      "$(cat "$HERALD_TS")" "openCheckpoint()"
 has "  and marks it taken, once"               "$(cat "$HERALD_TS")" "closeCheckpoint(cp.path, cp.text)"
 has "checkpoints land in the Operator's map"   "$(cat "$HERALD_TS")" 'join(KARTE_DIR, "checkpoints")'
-has "a state file left in debate comes up braked" "$(cat "$HERALD_TS")" 'RETIRED: Record<string, Gear> = { debate: "brake" }'
-# Nothing the Operator reads may still offer the retired gear. Two files still say
-# the word, and both only to retire it: herald/README.md documents the change, and
-# setup.sh translates an old state file when it reports the gear.
-for f in README.md pi/README.md herald/HERALD.md herald/bin/herald; do
+has "typing the retired name still brakes"  "$(cat "$HERALD_TS")" 'RETIRED: Record<string, Gear> = { debate: "brake" }'
+# But a retired gear *in the state file* is upgrade debris, not a live stop: it
+# drops into Drive, because a box that comes up mute after a pull looks broken.
+# Brake is mute on purpose, and that is only safe when the Operator chose it.
+has "a stale gear comes up in drive"        "$(cat "$HERALD_TS")" 'gear: isGear(named) ? named : "drive"'
+has "  and the Operator is told"            "$(cat "$HERALD_TS")" "a gear this version does not have"
+has "  with the tool surface recovered"     "$(cat "$HERALD_TS")" 'state.gear !== "drive" || staleGear'
+# Nothing the Operator reads may still offer the retired gear as a gear. The word
+# survives in exactly three places, each of them a retirement path: the extension
+# maps a typed "debate" onto brake, the launcher does the same for --gear, and
+# herald/README.md documents the change for anyone upgrading a live box.
+for f in README.md pi/README.md herald/HERALD.md setup.sh; do
   eq "no debate gear left in $f" "$(grep -ci 'debate' "$HERE/../$f" || true)" "0"
 done
-eq "setup.sh says debate once, to retire it" "$(grep -ci 'debate' "$HERE/../setup.sh" || true)" "1"
-has "  and km --check translates it" "$(grep -i 'debate' "$HERE/../setup.sh")" 'gear="brake (was debate — retired)"'
+has "the launcher retires it too" "$(cat "$HERE/../herald/bin/herald")" "debate is retired — gear → brake"
+# km --check reports an unknown gear honestly instead of printing a dead one.
+has "km --check names a retired gear" "$(cat "$HERE/../setup.sh")" 'gear="$gear → drive (retired gear)"'
 has "the retirement is documented" "$(cat "$HERE/../herald/README.md")" "Debate is retired"
 has "so is the brake, where the gears are"  "$(cat "$HERE/../herald/README.md")" "checkpoint"
 has "and in the contract the model reads"   "$(cat "$HERE/../herald/HERALD.md")" "**Brake**"

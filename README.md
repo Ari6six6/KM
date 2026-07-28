@@ -105,6 +105,10 @@ tokens and works mid-sentence. Then the Herald is idle: prompts stop reaching th
 model. Shift back to `drive` and the first turn is handed that checkpoint and told
 to continue, not to start over. `/checkpoint` shows the newest one.
 
+Because a stopped cockpit does not answer prompts, `herald --gear drive` sets the
+gear from the shell without starting it — the way back in if you left the box
+stopped and it looks dead.
+
 **Masks grow, they don't ship.** A mask is a persona the Herald wears — one at a
 time, one box, one GPU. **You start with zero, and that is correct.** No roster,
 no starter pack, no fixed number. When a session shows a real need for a

@@ -44,15 +44,21 @@ type Gear = "drive" | "brake" | "empty";
 const GEARS: Gear[] = ["drive", "brake", "empty"];
 const isGear = (s: string): s is Gear => (GEARS as string[]).includes(s);
 
-// Retired gears, and what a state file still holding one comes up as. The old
-// stop-gear switched the tools off and left nothing behind; brake is the same
-// stop with a checkpoint, so a box left in it comes back stopped, not driving.
+// Gear names that no longer exist, and what typing one now means. Typing is a
+// live intent: the Operator wants everything to stop, so it brakes.
 const RETIRED: Record<string, Gear> = { debate: "brake" };
 const toGear = (s: unknown): Gear | null => {
   if (typeof s !== "string") return null;
   const v = s.trim().toLowerCase();
   return isGear(v) ? v : (RETIRED[v] ?? null);
 };
+
+// A retired gear *found in the state file* is a different thing entirely, and
+// treating it like a live shift was a mistake worth naming: nothing was running
+// to interrupt, no checkpoint exists behind it, and the gear it braked into is
+// mute — so an upgraded box came up silent and looked broken. A stale gear is
+// upgrade debris. It becomes Drive, and the Operator is told what happened.
+let staleGear: string | null = null;
 
 interface HeraldState {
   gear: Gear;
@@ -63,8 +69,12 @@ interface HeraldState {
 function readState(): HeraldState {
   try {
     const raw = JSON.parse(readFileSync(STATE_FILE, "utf8")) as Partial<HeraldState>;
+    const named = typeof raw.gear === "string" ? raw.gear.trim().toLowerCase() : "";
+    if (named && !isGear(named)) staleGear = named;
     return {
-      gear: toGear(raw.gear) ?? "drive",
+      // Anything this version does not know — a retired gear, a typo, a gear from
+      // a future version — comes up in Drive. The box is usable first.
+      gear: isGear(named) ? named : "drive",
       mask: typeof raw.mask === "string" && raw.mask ? raw.mask : null,
       seat: typeof raw.seat === "string" && raw.seat ? raw.seat : DEFAULT_SEAT,
     };
@@ -205,6 +215,26 @@ function improvisedSubagents(): string[] {
   }
 }
 
+// Which model the agent runs on. KM_AGENT_MODEL wins; then a pin in
+// ~/.km/agent-model; then pi's own default. The pin is a file on purpose — env
+// is frozen when the seat starts, and the Operator has to be able to repoint the
+// agent on a live box without restarting the Herald.
+const AGENT_MODEL_PIN = join(KM_HOME, "agent-model");
+
+function agentModel(): { value: string; source: string } {
+  const env = (process.env.KM_AGENT_MODEL ?? "").trim();
+  if (env) return { value: env, source: "KM_AGENT_MODEL" };
+  try {
+    if (existsSync(AGENT_MODEL_PIN)) {
+      const pinned = readFileSync(AGENT_MODEL_PIN, "utf8").trim();
+      if (pinned) return { value: pinned, source: AGENT_MODEL_PIN };
+    }
+  } catch {
+    /* unreadable pin — pi's default is the honest answer */
+  }
+  return { value: "", source: "pi's default" };
+}
+
 function agentBrief(): string {
   return [
     `You are ${AGENT_NAME}.`,
@@ -246,8 +276,19 @@ function summon(task: string, signal?: AbortSignal): Promise<SummonResult> {
     agentBrief(),
   ];
   // No model by default: the agent runs on pi's default, which on a provisioned
-  // box is the model you already pay for. KM_AGENT_MODEL overrides it.
-  if (process.env.KM_AGENT_MODEL) args.push("--model", process.env.KM_AGENT_MODEL);
+  // box is the model you already pay for. A "provider/model" pin is split into
+  // the two flags pi wants; a bare name is passed as-is.
+  const { value: model } = agentModel();
+  if (model) {
+    if (model.includes("/")) {
+      const [prov, ...rest] = model.split("/");
+      const mid = rest.join("/");
+      if (prov) args.push("--provider", prov);
+      args.push("--model", mid || model);
+    } else {
+      args.push("--model", model);
+    }
+  }
   args.push(task);
 
   const { command, args: argv } = piInvocation(args);
@@ -626,14 +667,27 @@ export default function (pi: ExtensionAPI) {
     // On /reload out of Drive, pi hands back the empty set *we* installed. Taking
     // that as the base would strand the Operator with no tools on the way back to
     // Drive, so recover the real surface from the registry instead. In Drive an
-    // empty set is the Operator's own doing (--no-tools) and is left alone.
-    if (baseTools.length === 0 && state.gear !== "drive") baseTools = pi.getAllTools().map((t) => t.name);
+    // empty set is the Operator's own doing (--no-tools) and is left alone —
+    // unless we got here by dropping a stale gear into Drive, in which case the
+    // empty set is the old stopped gear's and recovering it is the whole point.
+    if (baseTools.length === 0 && (state.gear !== "drive" || staleGear)) baseTools = pi.getAllTools().map((t) => t.name);
     mkdirSync(MASKS_DIR, { recursive: true });
     if (state.mask && !readMask(state.mask)) state = { ...state, mask: null };
     if (state.mask) await wearMask(state.mask, ctx).catch(() => bare(ctx));
     else applyTools(ctx);
     writeState(state); // so the launcher and `km status` can see the cockpit from the first run
     paint(ctx);
+
+    // An upgrade must never leave the box mute. If the state file held a gear
+    // this version does not have, say so out loud — the Operator is looking at a
+    // cockpit whose gearstick just changed shape.
+    if (staleGear && ctx.hasUI) {
+      ctx.ui.notify(
+        `herald.json held "${staleGear}", a gear this version does not have. The Herald is in ${gearLabel(state.gear)} — type brake to stop and checkpoint.`,
+        "warning",
+      );
+      staleGear = null;
+    }
 
     // A box that was braked yesterday comes up braked, and says so with the file
     // that lets you pick the job back up.
@@ -794,6 +848,7 @@ export default function (pi: ExtensionAPI) {
         [
           `Agent · ${AGENT_NAME}`,
           `  reads: ${CALLCENTER}${existsSync(CALLCENTER) ? "" : "   (not there yet — created on the first summon)"}`,
+          `  model: ${agentModel().value || "pi's default"}   (${agentModel().source}${agentModel().value ? "" : ` — pin one: echo <provider/model> > ${AGENT_MODEL_PIN}`})`,
           "  tools: read, write, edit, bash",
           "  summon: ask the Herald, in Drive. Everything else the agent knows, you write in that file.",
         ].join("\n"),
