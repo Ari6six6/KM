@@ -55,7 +55,7 @@ Package it and share it later with `pi` packages (`pi install git:…`); see pi'
 ## `extensions/herald/` — the orchestration layer
 
 The other end of the scale from gpu-status: the extension behind the
-[cockpit](../herald). It holds the three gears (`/drive`, `/debate`, `/empty`),
+[cockpit](../herald). It holds the three gears (`/drive`, `/brake`, `/empty`),
 wears and grows persona-masks, and gates which of pi's *existing* tools are
 switched on. It registers three tools of its own — `mask_create`, `mask_wear`,
 and `agent_summon` — and changes nothing about `read`, `write`, `edit`, `bash`,
@@ -68,4 +68,7 @@ tools, and a dynamic `import()` to load a mask's TypeScript the moment it is
 first worn. `agent_summon` is the fourth lesson: a tool that shells out to a
 second `pi` (`-p --no-session --tools read,write,edit,bash --no-extensions
 --no-context-files`) and honours the tool's `AbortSignal`, so a gear shift kills
-the child. The launcher and the contract live in [`herald/`](../herald).
+the child. The brake is the fifth: an `input` hook that answers the Operator
+without spending a turn, and a checkpoint the *extension* writes out of what it
+watched go past — so stopping costs one file write instead of a summary the model
+has to think up. The launcher and the contract live in [`herald/`](../herald).

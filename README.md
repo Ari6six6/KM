@@ -89,13 +89,21 @@ running skill, a mask mid-thought, a tool call about to land.
 | Gear | |
 |------|--|
 | **Drive** | The Herald acts — decides, runs skills, wears masks, grows new ones. |
-| **Debate** | Everything stops. Tools off. It talks with you and does nothing else. |
-| **Empty** | Freewheel. No driving, no debating. |
+| **Brake** | Stop. It writes a checkpoint and goes idle. `drive` picks the job back up. |
+| **Empty** | Freewheel. Nothing drives, nothing is stopped mid-job. |
 
-Shift with `/drive`, `/debate`, `/empty`, or just type the bare word `drive`,
-`debate`, `empty` — because the cockpit has to fly from a phone, and hunting for
+Shift with `/drive`, `/brake`, `/empty`, or just type the bare word `drive`,
+`brake`, `empty` — because the cockpit has to fly from a phone, and hunting for
 `/` on a soft keyboard is the whole friction. The gear persists in
 `~/.km/herald.json`; `km --check` prints it.
+
+**The brake stops without losing the job.** Shifting to `brake` interrupts the
+turn, switches every tool off, and writes a checkpoint — the task in progress,
+what actually ran, the files touched — to `~/karte/checkpoints/`. The *extension*
+writes it, from what it watched go past, so braking costs one file write and zero
+tokens and works mid-sentence. Then the Herald is idle: prompts stop reaching the
+model. Shift back to `drive` and the first turn is handed that checkpoint and told
+to continue, not to start over. `/checkpoint` shows the newest one.
 
 **Masks grow, they don't ship.** A mask is a persona the Herald wears — one at a
 time, one box, one GPU. **You start with zero, and that is correct.** No roster,
@@ -264,7 +272,7 @@ KM/
 ├── setup.sh            # the script. the point.
 ├── README.md           # this file — zero-to-hero + the pi curriculum + the thesis
 ├── context/            # OPERATOR · HISTORY · THESIS · LESSONS  (loaded by pi)
-├── herald/             # the cockpit — launcher + contract (gears, masks)
+├── herald/             # the cockpit — launcher + contract (gears, brake, masks)
 ├── museum/             # MoR · hermes · rig · KM1 — one honest essay per ancestor
 ├── pi/                 # models.json template + the gpu-status and herald extensions
 └── tests/              # a no-box, no-network bash suite (CI on ubuntu-latest)

@@ -42,6 +42,9 @@ MASKS_DIR="$KM_HOME/masks"
 KARTE_DIR="${KM_KARTE:-$HOME/karte}"
 CALLCENTER="${KM_CALLCENTER:-$KARTE_DIR/callcenter.md}"
 KM_AGENT="${KM_AGENT:-smith}"
+# Where the brake gear leaves a checkpoint: one markdown file per stop, named for
+# the moment it was written, so the newest name is the newest checkpoint.
+CHECKPOINTS="${KM_CHECKPOINTS:-$KARTE_DIR/checkpoints}"
 
 # Anything KM moves out of the way rather than deletes lands here, with a stamp.
 PARKED_DIR="$KM_HOME/parked"
@@ -799,9 +802,11 @@ park_improvised_subagents() {
 }
 
 # The call-center file: one directory the Operator owns, one file he curates. We
-# create them if they are not there and never rewrite them if they are.
+# create them if they are not there and never rewrite them if they are. The
+# brake's checkpoints land in the same map, so the directory exists from the
+# start — an empty one is a signpost, not clutter.
 install_callcenter() {
-  mkdir -p "$KARTE_DIR"
+  mkdir -p "$KARTE_DIR" "$CHECKPOINTS"
   if [ -f "$CALLCENTER" ]; then
     ok "call-center file already there → $CALLCENTER (left untouched)"
     return 0
@@ -822,6 +827,12 @@ herald_get() { # $1=key
   sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$HERALD_STATE" | head -1
 }
 
+# the newest checkpoint the brake wrote, if any. Names are ISO timestamps, so the
+# last line is the newest file — no stat(1), which differs on every OS.
+latest_checkpoint() {
+  ls -1 "$CHECKPOINTS"/*.md 2>/dev/null | tail -1
+}
+
 # the Herald: the cockpit process (its launcher + contract) and the masks it grows.
 # The extension itself rides along in install_pi_extras; this is the process.
 install_herald() {
@@ -838,7 +849,7 @@ install_herald() {
     chmod +x "$KM_HOME/bin/herald"
     mkdir -p "$HOME/.local/bin"
     ln -sf "$KM_HOME/bin/herald" "$HOME/.local/bin/herald"
-    ok "Herald installed → herald   (gears: drive · debate · empty ·  masks: /mask)"
+    ok "Herald installed → herald   (gears: drive · brake · empty ·  masks: /mask)"
   else
     warn "could not install the Herald launcher (non-fatal) — retry with: km --herald"
   fi
@@ -914,7 +925,7 @@ hero_card() { # $1=served_name (or DEMO)
   printf '     %s3.%s  %skm status%s          %sis the tunnel live? what is served?%s\n' "$C_B" "$C_0" "$C_C" "$C_0" "$C_D" "$C_0"
   printf '\n'
   printf '     served model: %s%s%s   ·   manage: %skm watch / km down / km off%s\n' "$C_B" "$served" "$C_0" "$C_D" "$C_0"
-  printf '     cockpit: %sherald%s  %s— gears: drive · debate · empty. Masks grow when you need one.%s\n' "$C_C" "$C_0" "$C_D" "$C_0"
+  printf '     cockpit: %sherald%s  %s— gears: drive · brake · empty. Masks grow when you need one.%s\n' "$C_C" "$C_0" "$C_D" "$C_0"
   printf '     (if %skm%s is not found yet, open a new shell, or use %sbash ~/.km/setup.sh%s)\n\n' "$C_C" "$C_0" "$C_C" "$C_0"
 }
 
@@ -1099,11 +1110,15 @@ cmd_check() {
   if [ -f "$PI_DIR/extensions/gpu-status/index.ts" ]; then ok "gpu-status extension installed"
   else warn "no gpu-status extension at $PI_DIR/extensions/gpu-status/"; fi
   if [ -f "$PI_DIR/extensions/herald/index.ts" ] && [ -x "$KM_HOME/bin/herald" ]; then
-    local gear mask nmasks
+    local gear mask nmasks cp
     gear="$(herald_get gear)"; mask="$(herald_get mask)"
     [ "$mask" = "null" ] && mask=""   # bare: no mask worn
+    # a gear retired in a later version, still sitting in an old state file
+    [ "$gear" = "debate" ] && gear="brake (was debate — retired)"
     nmasks="$(ls -1 "$MASKS_DIR" 2>/dev/null | wc -l | tr -d ' ')"
     ok "Herald installed (gear ${gear:-drive} · mask ${mask:-none} · ${nmasks:-0} mask(s) grown)"
+    cp="$(latest_checkpoint)"
+    [ -n "$cp" ] && info "  newest brake checkpoint → $cp"
   else warn "no Herald — install with: km --herald"; fi
   if [ -f "$CALLCENTER" ]; then ok "agent $KM_AGENT reads $CALLCENTER"
   else warn "no call-center file at $CALLCENTER — create it with: km --herald"; fi
@@ -1133,7 +1148,8 @@ cmd_herald() {
   install_herald
   park_improvised_subagents
   install_callcenter
-  info "  gears:  drive · debate · empty   (type the word, or /drive /debate /empty)"
+  info "  gears:  drive · brake · empty   (type the word, or /drive /brake /empty)"
+  info "  brake:  stops now and writes a checkpoint to $CHECKPOINTS — drive resumes from it"
   info "  masks:  /mask · /mask new <name> <what it is for>   — none exist until you need one"
   info "  agent:  $KM_AGENT — summon it in Drive; it reads $CALLCENTER"
   ok "type: herald"
@@ -1192,9 +1208,12 @@ ${C_B}Manage (after first run — also available as the ${C_C}km${C_0}${C_B} com
   setup.sh --down                   stop the server AND drop the tunnel
 
 ${C_B}The Herald (cockpit — one process, three gears, masks it grows itself):${C_0}
-  herald                            start it   (gears: drive · debate · empty)
+  herald                            start it   (gears: drive · brake · empty)
   herald --seat <model>             assign the seat (default xai/grok-4.5; any model may hold it)
   setup.sh --herald                 (re)install the Herald alone, without touching the box
+  brake                             (inside the Herald) stop now; the checkpoint lands in
+                                    $CHECKPOINTS
+  drive                             (inside the Herald) resume from the newest checkpoint
 
 ${C_B}The agent (one, named, summoned from Drive):${C_0}
   $CALLCENTER

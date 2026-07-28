@@ -139,8 +139,8 @@ echo "== Herald: cockpit state + mask files =="
 export KM_HOME="$TMP/km"; HERALD_STATE="$KM_HOME/herald.json"; MASKS_DIR="$KM_HOME/masks"
 mkdir -p "$MASKS_DIR"
 eq "herald_get on a missing file is empty" "$(herald_get gear)" ""
-printf '{\n  "gear": "debate",\n  "mask": "archivist",\n  "seat": "xai/grok-4.5"\n}\n' > "$HERALD_STATE"
-eq "herald gear"  "$(herald_get gear)" "debate"
+printf '{\n  "gear": "brake",\n  "mask": "archivist",\n  "seat": "xai/grok-4.5"\n}\n' > "$HERALD_STATE"
+eq "herald gear"  "$(herald_get gear)" "brake"
 eq "herald mask"  "$(herald_get mask)" "archivist"
 eq "herald seat"  "$(herald_get seat)" "xai/grok-4.5"
 printf '{\n  "gear": "drive",\n  "mask": null,\n  "seat": "km-box/glm-4.7-flash"\n}\n' > "$HERALD_STATE"
@@ -190,8 +190,31 @@ has "summon spawns the agent in its own group"   "$(cat "$HERALD_TS")" "detached
 has "abort signals the group, not just the pi"   "$(cat "$HERALD_TS")" "process.kill(-pid, sig)"
 has "the extension stands down inside an agent"  "$(cat "$HERALD_TS")" 'process.env.KM_HERALD_CHILD === "1"'
 
+echo "== Herald: brake replaced debate =="
+# Debate was a stop-gear that switched the tools off and left nothing behind.
+# Brake is the same stop with a checkpoint, and it is the *extension* that writes
+# the file — a stop the model has to summarise first is not a stop.
+has "the gears are drive · brake · empty" "$(cat "$HERALD_TS")" 'Gear = "drive" | "brake" | "empty"'
+has "the brake writes the checkpoint itself"   "$(cat "$HERALD_TS")" "writeCheckpoint(state, previous, asked, calls, interrupted)"
+has "drive is handed the open checkpoint"      "$(cat "$HERALD_TS")" "openCheckpoint()"
+has "  and marks it taken, once"               "$(cat "$HERALD_TS")" "closeCheckpoint(cp.path, cp.text)"
+has "checkpoints land in the Operator's map"   "$(cat "$HERALD_TS")" 'join(KARTE_DIR, "checkpoints")'
+has "a state file left in debate comes up braked" "$(cat "$HERALD_TS")" 'RETIRED: Record<string, Gear> = { debate: "brake" }'
+# Nothing the Operator reads may still offer the retired gear. Two files still say
+# the word, and both only to retire it: herald/README.md documents the change, and
+# setup.sh translates an old state file when it reports the gear.
+for f in README.md pi/README.md herald/HERALD.md herald/bin/herald; do
+  eq "no debate gear left in $f" "$(grep -ci 'debate' "$HERE/../$f" || true)" "0"
+done
+eq "setup.sh says debate once, to retire it" "$(grep -ci 'debate' "$HERE/../setup.sh" || true)" "1"
+has "  and km --check translates it" "$(grep -i 'debate' "$HERE/../setup.sh")" 'gear="brake (was debate — retired)"'
+has "the retirement is documented" "$(cat "$HERE/../herald/README.md")" "Debate is retired"
+has "so is the brake, where the gears are"  "$(cat "$HERE/../herald/README.md")" "checkpoint"
+has "and in the contract the model reads"   "$(cat "$HERE/../herald/HERALD.md")" "**Brake**"
+
 echo "== the agent: call-center file and the parked improvisation =="
 export KM_KARTE="$TMP/karte"; KARTE_DIR="$KM_KARTE"; CALLCENTER="$KARTE_DIR/callcenter.md"
+CHECKPOINTS="$KARTE_DIR/checkpoints"
 KM_AGENT="smith"; PARKED_DIR="$KM_HOME/parked"
 install_callcenter >/dev/null
 truthy "install_callcenter creates the map directory" "[ -d '$KARTE_DIR' ]"
@@ -211,6 +234,18 @@ truthy "park keeps our own extensions" "[ -d '$PI_DIR/extensions/gpu-status' ]"
 eq "park moves it aside rather than deleting it" \
    "$(cat "$PARKED_DIR"/subagent-*/index.ts 2>/dev/null)" "improvised"
 truthy "park is a no-op when there is nothing to park" "park_improvised_subagents"
+
+echo "== the brake: where the checkpoints land =="
+# The brake's checkpoints share the Operator's map with the call-center file, so
+# install makes the directory whether or not anything has braked yet.
+truthy "install makes the checkpoint directory a signpost" "[ -d '$CHECKPOINTS' ]"
+eq "no checkpoint until something brakes" "$(latest_checkpoint)" ""
+printf 'first\n'  > "$CHECKPOINTS/2026-07-28T10-00-00-000Z.md"
+printf 'second\n' > "$CHECKPOINTS/2026-07-28T11-00-00-000Z.md"
+# Names are ISO timestamps, so the newest checkpoint is simply the last name —
+# no stat(1), whose flags differ between GNU and BSD.
+eq "the newest checkpoint is the last name" \
+   "$(latest_checkpoint)" "$CHECKPOINTS/2026-07-28T11-00-00-000Z.md"
 
 echo
 echo "----------------------------------------"

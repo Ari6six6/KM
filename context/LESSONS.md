@@ -47,3 +47,12 @@ Every rule below was paid for. Break one and you will re-pay it.
 - **Zero dependencies beyond a fresh Ubuntu image.** bash + ssh + curl +
   coreutils. The law from MoR. It is why the script runs on a box you rented
   ninety seconds ago.
+- **A mode that cannot act is not a mode.** The Herald's old `debate` gear
+  switched every tool off so the model could only talk. It read well and it was
+  useless: nothing the Master actually does can be done with the tools off, and a
+  half-off harness confuses whoever is supervising it. Retired for `brake`.
+- **A stop must leave something behind.** Stopping is cheap; losing the job is
+  not. `brake` interrupts the turn *and* writes a checkpoint — task, trail, files
+  touched — and `drive` reads it back. Which means: **the machine writes the
+  handover, not the model.** If stopping costs a summary the model has to think
+  up first, it is not a stop, it is one more turn you did not want.

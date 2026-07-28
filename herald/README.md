@@ -16,7 +16,7 @@ The Herald is a thin layer, not a framework. It is two files and one extension:
 |------|-----------|
 | [`bin/herald`](bin/herald) | the launcher — `pi` with the contract appended and a seat assigned |
 | [`HERALD.md`](HERALD.md) | the contract — appended to pi's system prompt, never replacing it |
-| [`../pi/extensions/herald/`](../pi/extensions/herald) | the extension — gears, masks, and the live path that grows them |
+| [`../pi/extensions/herald/`](../pi/extensions/herald) | the extension — gears, the brake's checkpoints, masks, and the live path that grows them |
 
 `setup.sh` installs all three (`km --herald` reinstalls just these, safely, on a
 live box). Nothing here modifies pi's four core tools or its agent loop.
@@ -32,18 +32,61 @@ about to land.
 | Gear | What it means |
 |------|---------------|
 | **Drive** | The Herald acts. It decides, runs skills, wears masks, and grows new ones. Full tool surface. |
-| **Debate** | Everything else stops. Tools are switched **off** and any tool call is blocked. The Herald talks with the Operator and does nothing else. |
-| **Empty** | Freewheel. No driving, no debating — prompts don't reach the model at all. Neutral. |
+| **Brake** | Stop. The shift interrupts the turn, writes a checkpoint, switches every tool **off**, and the Herald goes idle — prompts stop reaching the model. `drive` resumes from the checkpoint. |
+| **Empty** | Freewheel. Nothing drives and nothing is stopped mid-job — prompts don't reach the model at all. Neutral. |
 
-Shift with `/drive`, `/debate`, `/empty` — or just type the bare word `drive`,
-`debate`, or `empty`. The bare words exist because the Herald has to be drivable
+Shift with `/drive`, `/brake`, `/empty` — or just type the bare word `drive`,
+`brake`, or `empty`. The bare words exist because the Herald has to be drivable
 from a phone, where hunting for `/` on a soft keyboard is the whole friction.
 
 The gear is written to `~/.km/herald.json` and survives restarts, so the box you
-left in Debate is still in Debate tomorrow. `km --check` prints it.
+left braked is still braked tomorrow — and still holding the checkpoint that says
+where it stopped. `km --check` prints the gear.
 
 > The model never shifts its own gear. It is told which gear it is in and obeys;
 > the stick belongs to the Operator. That is what "top-priority" buys you.
+
+> **Debate is retired.** It was the old stop-gear: tools off, talk only. A gear
+> that cannot act is not a mode this box has any use for, and a stop that leaves
+> nothing behind is worse than no stop at all. `debate` — typed, or left in an old
+> `herald.json` — now brakes, and says so.
+
+---
+
+## The brake — stop now, lose nothing
+
+Braking is the cheapest thing the cockpit does. It costs **one file write and
+zero tokens**: the extension writes the checkpoint itself, out of what it already
+watched go past, so it works when the model is mid-sentence, looping, or wrong,
+and it never asks the model to "wrap up first".
+
+```sh
+brake              # or /brake — stop, checkpoint, idle
+/checkpoint        # where they live, and what the newest one says
+drive              # resume from it
+```
+
+Checkpoints are plain markdown, one file per brake, in the Operator's own map
+next to `callcenter.md`:
+
+```
+~/karte/checkpoints/2026-07-28T11-03-11-927Z.md
+```
+
+Names are ISO timestamps, so the last name is the newest one. Each file holds the
+gear it braked out of, the seat, the mask, whether a turn was cut mid-flight, the
+task in progress, what the Operator asked earlier, the trail of what actually ran
+(the last line flagged, honestly, as possibly unfinished), and the files touched.
+Nothing in it is inferred; it is all things the cockpit watched.
+
+Set `KM_CHECKPOINTS` to put them somewhere else.
+
+**Resuming.** The first turn back in Drive is handed the newest checkpoint that
+nobody has picked up yet, and told to continue rather than start over. Being
+picked up is recorded *in the file* — `status: open` becomes `status: resumed
+<when>` — so it survives a restart, a new seat, and a launcher that rewrites
+`herald.json`. One handover per brake, not one per turn. Any other reader (a
+summoned agent, you, `cat`) just reads the newest file; nothing else is needed.
 
 ---
 
@@ -157,8 +200,10 @@ Deliberately, per the brief:
 - **No fixed roster of masks.** Growth happens on need, in a running session.
 - **No team of agents.** One name, summoned one task at a time. If you want a
   second, that is a decision you make later, not a framework you get now.
-- **No UI beyond the gears, mask creation, and the summon.** A status line, and
-  words you type.
+- **No UI beyond the gears, the checkpoint, mask creation, and the summon.** A
+  status line, and words you type.
+- **No resume engine.** The brake writes a file and Drive reads it back once.
+  There is no queue, no scheduler, and nothing that replays a session.
 
 ---
 

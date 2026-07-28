@@ -4,14 +4,16 @@
 // changes nothing about pi's four core tools (read, write, edit, bash) or its
 // agent loop. All it does is:
 //
-//   1. hold a gear   — drive / debate / empty, top-priority, interrupts anything
+//   1. hold a gear   — drive / brake / empty, top-priority, interrupts anything
 //   2. wear a mask   — inject a persona (and its tools) for the next turn(s)
 //   3. grow a mask   — let the model write a new one, live, while the box runs
 //   4. summon the agent — hand one task to a separate pi that reads the
 //      Operator's own file and takes everything from it
+//   5. brake         — stop, write a checkpoint, go idle; resume from it on drive
 //
 // State lives in $KM_HOME/herald.json; masks live in $KM_HOME/masks/<name>/ as
 // ordinary pi skills, so pi discovers them itself (see resources_discover).
+// Brake's checkpoints are plain markdown under $KM_KARTE/checkpoints/.
 //
 // Docs: pi's packages/coding-agent/docs/extensions.md is the authority on this API.
 
@@ -38,9 +40,19 @@ const CALLCENTER = process.env.KM_CALLCENTER ?? join(KARTE_DIR, "callcenter.md")
 const AGENT_NAME = process.env.KM_AGENT ?? "smith";
 const PI_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 
-type Gear = "drive" | "debate" | "empty";
-const GEARS: Gear[] = ["drive", "debate", "empty"];
+type Gear = "drive" | "brake" | "empty";
+const GEARS: Gear[] = ["drive", "brake", "empty"];
 const isGear = (s: string): s is Gear => (GEARS as string[]).includes(s);
+
+// Retired gears, and what a state file still holding one comes up as. The old
+// stop-gear switched the tools off and left nothing behind; brake is the same
+// stop with a checkpoint, so a box left in it comes back stopped, not driving.
+const RETIRED: Record<string, Gear> = { debate: "brake" };
+const toGear = (s: unknown): Gear | null => {
+  if (typeof s !== "string") return null;
+  const v = s.trim().toLowerCase();
+  return isGear(v) ? v : (RETIRED[v] ?? null);
+};
 
 interface HeraldState {
   gear: Gear;
@@ -52,7 +64,7 @@ function readState(): HeraldState {
   try {
     const raw = JSON.parse(readFileSync(STATE_FILE, "utf8")) as Partial<HeraldState>;
     return {
-      gear: raw.gear && isGear(raw.gear) ? raw.gear : "drive",
+      gear: toGear(raw.gear) ?? "drive",
       mask: typeof raw.mask === "string" && raw.mask ? raw.mask : null,
       seat: typeof raw.seat === "string" && raw.seat ? raw.seat : DEFAULT_SEAT,
     };
@@ -295,15 +307,180 @@ function summon(task: string, signal?: AbortSignal): Promise<SummonResult> {
   });
 }
 
+// -------------------------------------------------------------- checkpoints
+//
+// Brake is the stop gear, and a stop is only worth anything if the work can be
+// picked up again. So the shift itself writes the checkpoint — from what this
+// extension already watched go past, not from anything the model has to think
+// up. That is the whole point: braking costs a file write and zero tokens, and
+// it still works when the model is mid-sentence, looping, or wrong.
+//
+// The file is plain markdown in the Operator's own map, next to callcenter.md,
+// so the next reader — the Herald after a /drive, a summoned agent, a human with
+// `cat` — needs nothing to read it.
+
+const CHECKPOINTS = process.env.KM_CHECKPOINTS ?? join(KARTE_DIR, "checkpoints");
+
+// A checkpoint nobody has resumed from yet says so in its own second line. That
+// is the marker, and it lives in the file on purpose: it survives a restart, a
+// new seat, and a launcher that rewrites herald.json behind us.
+const OPEN = "status: open";
+const RESUME_LIMIT = 6000;
+
+// Names are ISO timestamps, so lexical order is chronological — the last name is
+// the newest checkpoint, with no stat() and no clock to trust.
+function checkpointNames(): string[] {
+  if (!existsSync(CHECKPOINTS)) return [];
+  try {
+    return readdirSync(CHECKPOINTS).filter((f) => f.endsWith(".md")).sort();
+  } catch {
+    return [];
+  }
+}
+
+function latestCheckpoint(): string | null {
+  const names = checkpointNames();
+  return names.length > 0 ? join(CHECKPOINTS, names[names.length - 1]) : null;
+}
+
+function openCheckpoint(): { path: string; text: string } | null {
+  for (const name of checkpointNames().reverse()) {
+    const path = join(CHECKPOINTS, name);
+    try {
+      const text = readFileSync(path, "utf8");
+      if (text.includes(OPEN)) return { path, text };
+    } catch {
+      /* unreadable — the next one down is still a checkpoint */
+    }
+  }
+  return null;
+}
+
+function closeCheckpoint(path: string, text: string): void {
+  try {
+    writeFileSync(path, text.replace(OPEN, `status: resumed ${new Date().toISOString()}`));
+  } catch {
+    /* best effort: a checkpoint that cannot be marked is still readable */
+  }
+}
+
+// One tool call as the checkpoint records it. pi's event shape is not ours to
+// assume, so read the names it plausibly uses and fall back to something true
+// rather than to a guess dressed up as a fact.
+interface Call {
+  tool: string;
+  target?: string;
+}
+
+const firstString = (...vals: unknown[]): string | undefined =>
+  vals.find((v) => typeof v === "string" && v.trim() !== "") as string | undefined;
+
+function readCall(event: unknown): Call {
+  const e = (event ?? {}) as Record<string, unknown>;
+  const raw = [e.arguments, e.args, e.params, e.input, e.parameters].find(
+    (v) => v !== null && typeof v === "object",
+  ) as Record<string, unknown> | undefined;
+  const args = raw ?? {};
+  const target = firstString(args.file_path, args.filePath, args.path, args.command, args.task, args.name);
+  return {
+    tool: firstString(e.toolName, e.tool, e.name) ?? "tool",
+    target: target ? oneLine(target).slice(0, 160) : undefined,
+  };
+}
+
+// Which calls left something behind. Used for the "what exists now" section — a
+// resuming agent needs the paths before it needs the narrative.
+const TOUCHES = /^(write|edit|create|patch|apply|multi_?edit|notebook_?edit)/i;
+
+// A checkpoint is a handover, not a log: keep the tail and drop the rest.
+function remember<T>(list: T[], item: T, keep: number): void {
+  list.push(item);
+  if (list.length > keep) list.splice(0, list.length - keep);
+}
+
+// The checkpoint itself. Everything in it is something the cockpit watched go
+// past; nothing in it is inferred. `interrupted` says whether a turn was still
+// running when the brake landed, which is the difference between "this is done"
+// and "this may be half-done" for the last line of the trail.
+function writeCheckpoint(
+  state: HeraldState,
+  from: Gear,
+  asked: string[],
+  calls: Call[],
+  interrupted: boolean,
+): string | null {
+  const now = new Date();
+  const path = join(CHECKPOINTS, `${now.toISOString().replace(/[:.]/g, "-")}.md`);
+  const touched = [...new Set(calls.filter((c) => TOUCHES.test(c.tool) && c.target).map((c) => c.target as string))];
+  const line = (c: Call): string => `${c.tool}${c.target ? ` — ${c.target}` : ""}`;
+
+  const body = [
+    `# checkpoint — ${now.toISOString()}`,
+    "",
+    OPEN,
+    `gear: brake (from ${from})`,
+    `seat: ${state.seat}`,
+    `mask: ${state.mask ?? "none"}`,
+    `turn: ${interrupted ? "interrupted mid-flight by the brake" : "idle when the brake landed"}`,
+    "",
+    "## In progress",
+    "",
+    asked.length > 0 ? asked[asked.length - 1].trim() : "(nothing was asked in this session)",
+    "",
+  ];
+
+  if (asked.length > 1) {
+    body.push("## Asked earlier, same session", "", ...asked.slice(0, -1).map((a) => `- ${oneLine(a).slice(0, 200)}`), "");
+  }
+
+  body.push(
+    "## Trail — what actually ran, oldest first",
+    "",
+    ...(calls.length > 0
+      ? calls.map((c, i) =>
+          `- ${line(c)}${interrupted && i === calls.length - 1 ? "   ← last call before the brake; it may not have finished" : ""}`,
+        )
+      : ["- (no tool calls this session)"]),
+    "",
+    "## Files touched",
+    "",
+    ...(touched.length > 0 ? touched.map((t) => `- ${t}`) : ["- (none recorded)"]),
+    "",
+    "## Resume",
+    "",
+    "Shift back with `drive`. The Herald is handed the newest open checkpoint on its",
+    "next turn, marks it resumed, and carries on from here instead of starting over.",
+    "",
+  );
+
+  try {
+    mkdirSync(CHECKPOINTS, { recursive: true });
+    writeFileSync(path, body.join("\n"));
+    return path;
+  } catch {
+    return null;
+  }
+}
+
 // ------------------------------------------------------- the prompt the gear adds
 
 function gearContract(gear: Gear): string {
   const head = "# Herald gear (KM orchestration layer)\n\nThe Operator sets the gear. You never set it yourself; you report it.";
   if (gear === "drive")
     return `${head}\n\nCurrent gear: **DRIVE**. You act. You decide, you run skills, and you may switch masks (mask_wear) or grow a new one (mask_create) when a real need shows up in this session — not speculatively.`;
-  if (gear === "debate")
-    return `${head}\n\nCurrent gear: **DEBATE**. All other activity is stopped. Your tools are switched off and any tool call will be blocked. Talk with the Operator and nothing else: think out loud, argue, plan. Do not promise to do work — you cannot act until the Operator shifts back to Drive.`;
-  return `${head}\n\nCurrent gear: **EMPTY**. Freewheel. Nothing is driving and nothing is being debated. If you are somehow given a turn, say only that the Herald is in Empty.`;
+  if (gear === "brake") {
+    const cp = latestCheckpoint();
+    return `${head}\n\nCurrent gear: **BRAKE**. Stop. The checkpoint is already written${cp ? ` (${cp})` : ""} — you do not write it and you do not add to it. No tools, no work, no long reasoning. If you are given a turn at all, say in one line that the Herald is braked, and stop.`;
+  }
+  return `${head}\n\nCurrent gear: **EMPTY**. Freewheel. Nothing is driving and nothing is stopped mid-job. If you are somehow given a turn, say only that the Herald is in Empty.`;
+}
+
+function resumeContract(path: string, text: string): string {
+  return [
+    "# Resume from checkpoint",
+    `The Herald was braked mid-job. This is where the work stopped (${path}). Continue from it — do not start the job again from the top, and do not redo what the trail says is already done. Say in one line what you are resuming, then act.`,
+    text.slice(0, RESUME_LIMIT).trim(),
+  ].join("\n\n");
 }
 
 function maskContract(mask: Mask): string {
@@ -334,8 +511,14 @@ export default function (pi: ExtensionAPI) {
   const maskTools = new Map<string, string[]>();
   const loaded = new Set<string>();
 
+  // What the brake will write down, collected as the session runs so that the
+  // shift itself needs no thinking: what the Operator asked for, and what went
+  // past on the way. Both are capped — a checkpoint is a handover, not a log.
+  const asked: string[] = [];
+  const calls: Call[] = [];
+
   const gearLabel = (g: Gear): string =>
-    g === "drive" ? "DRIVE ▶" : g === "debate" ? "DEBATE ‖" : "EMPTY ○";
+    g === "drive" ? "DRIVE ▶" : g === "brake" ? "BRAKE ■" : "EMPTY ○";
 
   function paint(ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
@@ -343,7 +526,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   // The only thing that touches the tool surface: which of the existing tools are
-  // switched on. Debate and Empty switch them all off; Drive restores the base set
+  // switched on. Brake and Empty switch them all off; Drive restores the base set
   // (narrowed to the worn mask's allowlist, widened by the tools it brought).
   function applyTools(ctx?: ExtensionContext): void {
     if (state.gear !== "drive") {
@@ -365,13 +548,28 @@ export default function (pi: ExtensionAPI) {
   }
 
   // A gear is hard: it interrupts whatever is running below it, immediately.
+  // Brake also writes the checkpoint, here, in the shift — before the model is
+  // given any chance to keep going, and without asking it for anything.
   function shiftGear(next: Gear, ctx: ExtensionContext): void {
     const previous = state.gear;
     state = { ...state, gear: next };
     writeState(state);
-    if (!ctx.isIdle()) ctx.abort();
+    const interrupted = !ctx.isIdle();
+    if (interrupted) ctx.abort();
     applyTools(ctx);
     paint(ctx);
+
+    if (next === "brake" && previous !== "brake") {
+      const path = writeCheckpoint(state, previous, asked, calls, interrupted);
+      ctx.ui.notify(
+        path
+          ? `Herald → ${gearLabel(next)} — stopped. Checkpoint: ${path}\nType drive to resume from it.`
+          : `Herald → ${gearLabel(next)} — stopped, but no checkpoint could be written under ${CHECKPOINTS}.`,
+        path ? "warning" : "error",
+      );
+      return;
+    }
+
     if (previous !== next) ctx.ui.notify(`Herald → ${gearLabel(next)}`, next === "drive" ? "info" : "warning");
     else ctx.ui.notify(`Herald is already in ${gearLabel(next)}`, "info");
   }
@@ -409,12 +607,14 @@ export default function (pi: ExtensionAPI) {
 
   function statusLines(): string[] {
     const masks = listMasks();
+    const cp = latestCheckpoint();
     return [
       `Herald · gear ${gearLabel(state.gear)} · seat ${state.seat}`,
       `  mask:  ${state.mask ?? "(bare — the four core tools, nothing added)"}`,
       `  masks: ${masks.length ? masks.join(", ") : "none yet — /mask new <name> <what it is for>"}`,
       `  agent: ${AGENT_NAME} — reads ${CALLCENTER}${existsSync(CALLCENTER) ? "" : " (not written yet)"}`,
-      `  gears: /drive  /debate  /empty   (or just type: drive · debate · empty)`,
+      `  brake: ${cp ? `${cp}${openCheckpoint()?.path === cp ? " (open — drive resumes from it)" : " (resumed)"}` : `no checkpoint yet — they land in ${CHECKPOINTS}`}`,
+      `  gears: /drive  /brake  /empty   (or just type: drive · brake · empty)`,
     ];
   }
 
@@ -435,6 +635,16 @@ export default function (pi: ExtensionAPI) {
     writeState(state); // so the launcher and `km status` can see the cockpit from the first run
     paint(ctx);
 
+    // A box that was braked yesterday comes up braked, and says so with the file
+    // that lets you pick the job back up.
+    if (state.gear === "brake" && ctx.hasUI) {
+      const cp = latestCheckpoint();
+      ctx.ui.notify(
+        `Herald is in ${gearLabel(state.gear)} — stopped.${cp ? ` Checkpoint: ${cp}.` : ""} Type drive to resume from it.`,
+        "warning",
+      );
+    }
+
     const improvised = improvisedSubagents();
     if (improvised.length > 0 && ctx.hasUI)
       ctx.ui.notify(
@@ -453,16 +663,33 @@ export default function (pi: ExtensionAPI) {
     const blocks = [gearContract(state.gear)];
     const mask = state.mask ? readMask(state.mask) : null;
     if (mask) blocks.push(maskContract(mask));
+    // Coming back to Drive: hand over the newest checkpoint nobody has picked up
+    // yet, once, and mark it taken. This is the other half of the brake — the
+    // stop is only cheap because the resume is automatic.
+    if (state.gear === "drive") {
+      const cp = openCheckpoint();
+      if (cp) {
+        blocks.push(resumeContract(cp.path, cp.text));
+        closeCheckpoint(cp.path, cp.text);
+      }
+    }
     return { systemPrompt: `${event.systemPrompt}\n\n${blocks.join("\n\n")}` };
   });
 
   // Belt and braces: tools are already switched off outside Drive, but a tool
-  // registered mid-turn must not slip through either.
-  pi.on("tool_call", async () => {
-    if (state.gear === "drive") return;
+  // registered mid-turn must not slip through either. What we see here is also
+  // what the brake writes down, so the checkpoint costs nothing to produce.
+  pi.on("tool_call", async (event) => {
+    if (state.gear === "drive") {
+      remember(calls, readCall(event), 40);
+      return;
+    }
     return {
       block: true,
-      reason: `Herald is in ${state.gear.toUpperCase()} — tools are off. The Operator shifts to Drive with /drive.`,
+      reason:
+        state.gear === "brake"
+          ? "Herald is in BRAKE — stopped, the checkpoint is written. The Operator shifts to Drive with /drive."
+          : `Herald is in ${state.gear.toUpperCase()} — tools are off. The Operator shifts to Drive with /drive.`,
     };
   });
 
@@ -476,10 +703,29 @@ export default function (pi: ExtensionAPI) {
       shiftGear(text, ctx);
       return { action: "handled" };
     }
-    if (state.gear === "empty") {
-      ctx.ui.notify("Herald is in EMPTY — freewheeling. Type drive to engage, or debate to talk.", "warning");
+    // Retired gear names still work as words, so an Operator with the old habit
+    // (or an old note pinned somewhere) gets the stop he meant, not a prompt.
+    const retired = RETIRED[text];
+    if (retired) {
+      ctx.ui.notify(`"${text}" is retired — shifting to ${gearLabel(retired)} instead.`, "warning");
+      shiftGear(retired, ctx);
       return { action: "handled" };
     }
+    // Braked means idle: nothing reaches the model, so the stop stays a stop and
+    // costs nothing to hold.
+    if (state.gear === "brake") {
+      const cp = latestCheckpoint();
+      ctx.ui.notify(
+        `Herald is in BRAKE — stopped and idle.${cp ? ` Checkpoint: ${cp}.` : ""} Type drive to resume from it.`,
+        "warning",
+      );
+      return { action: "handled" };
+    }
+    if (state.gear === "empty") {
+      ctx.ui.notify("Herald is in EMPTY — freewheeling. Type drive to engage, or brake to stop and checkpoint.", "warning");
+      return { action: "handled" };
+    }
+    remember(asked, event.text.trim(), 5);
     return { action: "continue" };
   });
 
@@ -490,15 +736,15 @@ export default function (pi: ExtensionAPI) {
       description:
         gear === "drive"
           ? "Gear: Herald acts — decides, runs skills, switches masks"
-          : gear === "debate"
-            ? "Gear: stop everything and talk only with the Operator"
-            : "Gear: freewheel — no driving, no debating",
+          : gear === "brake"
+            ? "Gear: stop now, write a checkpoint, go idle"
+            : "Gear: freewheel — nothing drives, nothing is stopped mid-job",
       handler: async (_args, ctx) => shiftGear(gear, ctx),
     });
   }
 
   pi.registerCommand("gear", {
-    description: "Show the gear, or shift it: /gear drive|debate|empty",
+    description: "Show the gear, or shift it: /gear drive|brake|empty",
     getArgumentCompletions: (prefix) =>
       GEARS.filter((g) => g.startsWith(prefix)).map((g) => ({ value: g, label: g })),
     handler: async (args, ctx) => {
@@ -507,11 +753,32 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(statusLines().join("\n"), "info");
         return;
       }
-      if (!isGear(want)) {
-        ctx.ui.notify(`unknown gear "${want}" — drive, debate, or empty`, "error");
+      const gear = toGear(want);
+      if (!gear) {
+        ctx.ui.notify(`unknown gear "${want}" — drive, brake, or empty`, "error");
         return;
       }
-      shiftGear(want, ctx);
+      if (gear !== want) ctx.ui.notify(`"${want}" is retired — shifting to ${gearLabel(gear)} instead.`, "warning");
+      shiftGear(gear, ctx);
+    },
+  });
+
+  pi.registerCommand("checkpoint", {
+    description: "The brake's checkpoints: where they live, and what the newest one says",
+    handler: async (_args, ctx) => {
+      const cp = latestCheckpoint();
+      if (!cp) {
+        ctx.ui.notify(`No checkpoint yet. One is written every time you shift to brake; they land in ${CHECKPOINTS}.`, "info");
+        return;
+      }
+      let text = "";
+      try {
+        text = readFileSync(cp, "utf8");
+      } catch (err) {
+        ctx.ui.notify(`checkpoint at ${cp} could not be read: ${(err as Error).message}`, "error");
+        return;
+      }
+      ctx.ui.notify([`Checkpoints · ${CHECKPOINTS}`, `newest: ${cp}`, "", text.trim()].join("\n"), "info");
     },
   });
 
